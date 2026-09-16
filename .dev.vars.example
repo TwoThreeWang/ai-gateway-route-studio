@@ -1,0 +1,18 @@
+# 复制为 .dev.vars（已被 .gitignore 排除，不会提交）后填入测试值
+# 仅本地 npx wrangler dev 使用；线上部署用 Dashboard → Settings → Variables and Secrets
+
+ADMIN_TOKEN=dev123
+CF_API_TOKEN=你的Cloudflare_API_Token
+ACCOUNT_ID=替换为你的账户ID
+
+# 可选：拉取各厂商模型列表（不填则该厂商只能手动输入模型名）
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+DEEPSEEK_API_KEY=
+MOONSHOT_API_KEY=
+XAI_API_KEY=
+GROQ_API_KEY=
+MISTRAL_API_KEY=
+OPENROUTER_API_KEY=
+PERPLEXITY_API_KEY=

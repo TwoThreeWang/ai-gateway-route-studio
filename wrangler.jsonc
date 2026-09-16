@@ -1,0 +1,19 @@
+{
+  "name": "ai-gateway-route-studio",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-08-01",
+  // 静态资源目录：/ 返回 index.html，/login.html 登录页，/assets/* 静态文件
+  // run_worker_first=true：所有请求先过 Worker（登录门），通过后转发给静态资源
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  // ↓↓ 部署前改成你的 Cloudflare 账户 ID（非敏感，可用明文）
+  "vars": {
+    "ACCOUNT_ID": "替换为你的账户ID"
+  }
+  // 敏感信息用 secret（不要写在这里）。两种配置方式任选：
+  //   GitHub 部署：Dashboard → 该 Worker → Settings → Variables and Secrets → Add（类型选 Secret）
+  //   CLI 部署：wrangler secret put ADMIN_TOKEN / CF_API_TOKEN / OPENAI_API_KEY 等
+}

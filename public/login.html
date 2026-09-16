@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Route Studio · 登录</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    background: #F4F4F5; color: #1C1C1E;
+    background-image: radial-gradient(#E4E4E7 1px, transparent 1px); background-size: 22px 22px;
+  }
+  .card {
+    width: 360; background: #fff; border: 1px solid #E4E4E7; border-radius: 14px;
+    padding: 32px 30px; box-shadow: 0 10px 40px rgba(0,0,0,.08);
+  }
+  h1 { font-size: 17px; margin: 14px 0 4px; }
+  p  { font-size: 12px; color: #71717A; line-height: 1.6; margin-bottom: 18px; }
+  input {
+    width: 100%; padding: 11px 12px; border: 1px solid #E4E4E7; border-radius: 8px;
+    background: #FAFAFA; font-size: 14px; outline: none; margin-bottom: 12px;
+  }
+  input:focus { border-color: #F6821F; }
+  button {
+    width: 100%; padding: 11px 0; border: none; border-radius: 8px; cursor: pointer;
+    background: #F6821F; color: #fff; font-size: 14px; font-weight: 700;
+  }
+  .err { color: #B91C1C; font-size: 12px; margin-bottom: 10px; min-height: 16px; }
+  .logo { height: 26px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <img class="logo" src="/assets/cloudflare-logo.svg" alt="Cloudflare">
+  <h1>Route Studio · AI 线路管理台</h1>
+  <p>请输入访问口令。口令由部署者通过 <code>wrangler secret put ADMIN_TOKEN</code> 设置。</p>
+  <div class="err" id="err"></div>
+  <input type="password" id="token" placeholder="访问口令" autocomplete="current-password">
+  <button id="go">进入管理台</button>
+</div>
+<script>
+  const err = document.getElementById("err");
+  async function login() {
+    const token = document.getElementById("token").value.trim();
+    if (!token) { err.textContent = "请输入口令"; return; }
+    document.getElementById("go").textContent = "验证中…";
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (res.ok) { location.href = "/"; return; }
+      const data = await res.json().catch(() => ({}));
+      err.textContent = data.error || ("登录失败 " + res.status);
+    } catch (e) { err.textContent = "网络错误：" + e.message; }
+    document.getElementById("go").textContent = "进入管理台";
+  }
+  document.getElementById("go").onclick = login;
+  document.getElementById("token").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
+</script>
+</body>
+</html>
