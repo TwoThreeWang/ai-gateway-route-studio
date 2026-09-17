@@ -1015,6 +1015,7 @@ function App() {
   const [pulling, setPulling] = useState(false);
   const [models, setModels] = useState([]);
   const [pulledFrom, setPulledFrom] = useState(null);
+  const [routeDebug, setRouteDebug] = useState(null); // 当前路由 API 原始返回（排查空白画布用）
   const toastT = useRef(null);
 
   const notify = (type, msg) => {
@@ -1032,6 +1033,7 @@ function App() {
   };
   const selectRoute = async (rid, list) => {
     setRouteId(rid); setSelectedId(null); setView("canvas");
+    setRouteDebug(null);
     try {
       const detail = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(rid)}`);
       const r = unwrap(detail) || {};
@@ -1041,12 +1043,25 @@ function App() {
       try {
         const vdata = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(rid)}/versions`);
         vlist = normVersions(pickList(vdata));
-      } catch (e) {}
-      if (!els && vlist.length) {
-        try {
-          const vd = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(rid)}/versions/${encodeURIComponent(vlist[0].id)}`);
-          els = unwrap(vd)?.elements || unwrap(vd)?.route?.elements || [];
-        } catch (e) {}
+      } catch (e) {
+        notify("error", "拉取版本列表失败：" + e.message);
+      }
+      // 如果路由详情没有 elements，取「已部署版本」或「最新版本」的详情兜底
+      if (!els) {
+        const targetVid = dvid || (vlist[0] && vlist[0].id);
+        if (targetVid) {
+          try {
+            const vd = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(rid)}/versions/${encodeURIComponent(targetVid)}`);
+            const ver = unwrap(vd) || {};
+            els = ver.elements;
+            // 某些响应把 elements 放在 data 字符串里（JSON）
+            if (!els && ver.data && typeof ver.data === "string") {
+              try { els = JSON.parse(ver.data).elements; } catch (_) {}
+            }
+          } catch (e) {
+            notify("error", "拉取版本详情失败：" + e.message);
+          }
+        }
       }
       els = els || [];
       setElements(els);
@@ -1055,6 +1070,7 @@ function App() {
       setDeployedVid(dvid);
       setRouteName(r.name || rid);
       setJsonDraft(JSON.stringify(els, null, 2));
+      setRouteDebug({ detail: r, versions: vlist });
     } catch (e) {
       notify("error", e.message);
     }
@@ -1259,6 +1275,20 @@ function App() {
             <Canvas graph={graph} selectedId={selectedId} onSelect={setSelectedId} onInsert={insertAfter}
               zoom={zoom} setZoom={setZoom} gwId={gwId} accountId={accountId} routeName={routeName}
               view={view} setView={setView} jsonDraft={jsonDraft} setJsonDraft={setJsonDraft} onApplyJson={applyJson} />
+            {elements.length === 0 && routeDebug && (
+              <div style={{ position: "absolute", right: 340, top: 70, bottom: 20, width: 360, zIndex: 40,
+                background: "rgba(255,255,255,.96)", border: `1px solid ${C.line}`, borderRadius: 10,
+                boxShadow: "0 10px 30px rgba(0,0,0,.12)", padding: 14, overflow: "auto", fontSize: 11 }}>
+                <div style={{ fontWeight: 700, fontSize: 12, color: C.red, marginBottom: 8 }}>
+                  流程图为空 · 调试信息
+                </div>
+                <div style={{ color: C.ink2, marginBottom: 8 }}>路由详情返回的 elements 为空，且版本详情也没有 elements。请检查 Worker 是否已部署最新代码，或把下面 JSON 发给我。</div>
+                <div style={{ color: C.ink3, marginBottom: 4 }}>路由详情 /routes/{routeId}</div>
+                <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", background: C.bg, padding: 8, borderRadius: 6, fontSize: 10, lineHeight: 1.5 }}>{JSON.stringify(routeDebug.detail, null, 2)}</pre>
+                <div style={{ color: C.ink3, margin: "10px 0 4px" }}>版本列表 /routes/{routeId}/versions</div>
+                <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", background: C.bg, padding: 8, borderRadius: 6, fontSize: 10, lineHeight: 1.5 }}>{JSON.stringify(routeDebug.versions, null, 2)}</pre>
+              </div>
+            )}
             <Inspector elements={elements} selectedId={selectedId} patchProps={patchProps} setOutputs={setOutputs}
               onDeleteNode={deleteNode} versions={versions} deployedVid={deployedVid}
               onDeployVersion={rollback} onRollback={rollback} routeName={routeName} gwId={gwId}
