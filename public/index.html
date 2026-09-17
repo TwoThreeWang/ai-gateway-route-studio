@@ -925,6 +925,11 @@ function GatewaySettingsModal({ gwId, gwRaw, onClose, onSave, busy }) {
         <div style={{ fontSize: 11.5, color: C.ink3, marginBottom: 8 }}>
           保存 = PUT /ai-gateway/gateways/{"{id}"}，立即对整个网关生效
         </div>
+        <div style={{ fontSize: 11.5, color: C.orangeDark, background: "#FFF7EF",
+          border: "1px solid #F8C79B", borderRadius: 7, padding: "8px 12px", marginBottom: 12, lineHeight: 1.6 }}>
+          官方要求：<b>使用动态路由必须开启「需要令牌才能调用」（authentication）</b>，并把厂商密钥存进
+          Provider Keys（BYOK）。开启后拉取模型列表需要在 Worker 配置 CF_AIG_TOKEN（AI Gateway 页面生成的令牌）。
+        </div>
         {row("需要令牌才能调用", "authentication", "开启后程序必须携带密钥令牌，防止被人盗用你的额度。", toggle("authentication"))}
         {row("响应缓存有效期", "cache_ttl", "相同问题直接返回缓存结果；0 = 关闭缓存。", num("cache_ttl", 0, 86400, "秒"))}
         {row("记录请求日志", "collect_logs", "保存每次请求的问题、回答和花费，方便排查问题。", toggle("collect_logs"))}
@@ -1199,12 +1204,20 @@ function App() {
     } catch (e) { notify("error", e.message); }
     setBusy(false);
   };
+  // 网关可写字段白名单（官方 gateways schema），PUT 时剔除 id/created_at 等只读字段
+  const GW_WRITABLE = ["authentication", "cache_ttl", "cache_invalidate_on_update", "collect_logs",
+    "log_classification", "log_management", "log_management_strategy", "logpush",
+    "rate_limiting_interval", "rate_limiting_limit", "rate_limiting_technique",
+    "retry_backoff", "retry_delay", "retry_max_attempts", "spend_limits", "byok_only",
+    "guardrails", "dlp", "otel", "stripe", "workers_ai_billing_mode", "zdr"];
   const saveSettings = async (patched) => {
     setBusy(true);
     try {
-      const body = { ...(gwRaw || {}), ...patched };
+      const merged = { ...(gwRaw || {}), ...patched };
+      const body = {};
+      GW_WRITABLE.forEach((k) => { if (merged[k] !== undefined) body[k] = merged[k]; });
       const data = await api("/gw/" + encodeURIComponent(gwId), { method: "PUT", body });
-      setGwRaw(data?.result || body);
+      setGwRaw(unwrap(data) || body);
       notify("ok", "网关设置已保存并生效");
       setModal(null);
     } catch (e) { notify("error", e.message); }
