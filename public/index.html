@@ -143,9 +143,10 @@ function winDesc(s) {
   return { 60: "分钟", 3600: "小时", 86400: "天", 604800: "周", 2592000: "月" }[s] || (s ? `${s} 秒` : "—");
 }
 // 新建节点默认属性 / 默认输出口（官方结构）
+// 实测校验：model 节点必须带 timeout/retries，outputs 必须同时有 success 和 fallback
 function defaultProps(type) {
   switch (type) {
-    case "model": return { provider: "openai", model: "gpt-4.1-mini", timeout: 60000, retries: 2 };
+    case "model": return { provider: "workers-ai", model: "@cf/meta/llama-3.1-8b-instruct", timeout: 60000, retries: 2 };
     case "conditional": return { conditions: { "metadata.plan": { "$eq": "paid" } } };
     case "rate-count": return { limitType: "count", key: "metadata.user_id", limit: 100, window: 3600 };
     case "rate-cost": return { limitType: "cost", key: "metadata.user_id", limit: 20, window: 2592000 };
@@ -155,7 +156,8 @@ function defaultProps(type) {
 function defaultOutputs(type, t) {
   const nx = t ? { elementId: t } : null;
   if (type === "conditional") return nx ? { true: nx } : {};
-  if (type === "model" || type === "rate") return nx ? { success: nx } : {};
+  if (type === "model") return nx ? { success: nx, fallback: nx } : {};
+  if (type === "rate") return nx ? { success: nx } : {};
   if (type === "percentage") return {};
   return nx ? { next: nx } : {};
 }
@@ -225,8 +227,9 @@ const portY = (node, idx) => node.y + ((idx + 1) * node.h) / (outPorts(node.el).
 const inY = (node) => node.y + node.h / 2;
 
 /* ───── 模板（官方 elements 结构：outputs 为命名键对象） ───── */
-// 默认用 workers-ai 模型：它是 Cloudflare 托管模型，不依赖外部厂商 BYOK，
-// 在 byok_only / authentication 严格网关上创建成功率最高。创建后可在画布上改成任何 provider。
+// 实测校验规则（API 返回 code 7001 "Required"）：
+//   model 节点必须有 properties.timeout + properties.retries，且 outputs 必须同时带 success 和 fallback 两个出口。
+// 默认用 workers-ai 模型：Cloudflare 托管模型，不依赖外部厂商 BYOK，严格网关上创建成功率最高。
 function buildTemplate(kind) {
   const els = [];
   const add = (id, type, props) => { els.push({ id, type, outputs: {}, ...(props ? { properties: props } : {}) }); return els[els.length - 1]; };
@@ -234,28 +237,31 @@ function buildTemplate(kind) {
   if (kind === "paid") {
     add("e1","start"); add("e2","conditional",{ conditions: { "metadata.plan": { "$eq": "paid" } } });
     add("e3","rate",{ limitType:"cost", key:"metadata.user_id", limit:50, window:2592000 });
-    add("e4","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.1-8b-instruct" });
+    add("e4","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.1-8b-instruct", timeout:60000, retries:2 });
     add("e5","rate",{ limitType:"count", key:"metadata.user_id", limit:120, window:3600 });
-    add("e6","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+    add("e6","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.3-70b-instruct-fp8-fast", timeout:60000, retries:2 });
     add("e7","end");
     link("e1","next","e2"); link("e2","true","e3"); link("e2","false","e5");
     link("e3","success","e4"); link("e5","success","e6");
-    link("e4","success","e7"); link("e6","success","e7");
+    link("e4","success","e7"); link("e4","fallback","e6");
+    link("e6","success","e7"); link("e6","fallback","e7");
   } else if (kind === "ab") {
     add("a1","start"); add("a2","percentage");
-    add("a3","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.1-8b-instruct" }); add("a4","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+    add("a3","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.1-8b-instruct", timeout:60000, retries:2 }); add("a4","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.3-70b-instruct-fp8-fast", timeout:60000, retries:2 });
     add("a5","end");
     link("a1","next","a2"); link("a2","10%","a3"); link("a2","90%","a4");
-    link("a3","success","a5"); link("a4","success","a5");
+    link("a3","success","a5"); link("a3","fallback","a4");
+    link("a4","success","a5"); link("a4","fallback","a5");
   } else if (kind === "limit") {
     add("b1","start"); add("b2","rate",{ limitType:"count", key:"metadata.user_id", limit:60, window:3600 });
-    add("b3","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.1-8b-instruct" }); add("b4","end");
+    add("b3","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.1-8b-instruct", timeout:60000, retries:2 }); add("b4","end");
     link("b1","next","b2"); link("b2","success","b3"); link("b3","success","b4");
+    link("b3","fallback","b4");
   } else { // fallback
     add("f1","start"); add("f2","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.1-8b-instruct", timeout:60000, retries:2 });
-    add("f3","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.3-70b-instruct-fp8-fast" }); add("f4","end");
+    add("f3","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.3-70b-instruct-fp8-fast", timeout:30000, retries:1 }); add("f4","end");
     els.find((e) => e.id === "f2").outputs = { success: { elementId: "f4" }, fallback: { elementId: "f3" } };
-    link("f1","next","f2"); link("f3","success","f4");
+    link("f1","next","f2"); link("f3","success","f4"); link("f3","fallback","f4");
   }
   return els;
 }
@@ -265,6 +271,23 @@ const TEMPLATES = [
   { key: "limit", name: "用量限制", desc: "一个模型加一道次数闸门，防止被刷爆" },
   { key: "fallback", name: "故障兜底", desc: "主力模型出错时自动换备用模型（需 API 支持 model 双出口）" },
 ];
+
+// 提交前本地校验（实测 API 规则，code 7001）：model 节点必须带 timeout/retries，
+// 且 outputs 必须同时含 success 和 fallback 两条连线
+function validateElements(els) {
+  const problems = [];
+  (els || []).forEach((e, i) => {
+    if (elType(e) !== "model") return;
+    const p = e.properties || {};
+    const name = `节点 ${i + 1}（${p.model || "模型"}）`;
+    if (typeof p.timeout !== "number") problems.push(`${name} 缺少超时时间`);
+    if (typeof p.retries !== "number") problems.push(`${name} 缺少重试次数`);
+    const outs = e.outputs || {};
+    if (!outs.success?.elementId) problems.push(`${name} 的「正常」出口未连线`);
+    if (!outs.fallback?.elementId) problems.push(`${name} 的「出错」出口未连线`);
+  });
+  return problems;
+}
 
 /* ───── Toast ───── */
 function Toast({ toast }) {
@@ -1214,6 +1237,8 @@ function App() {
   };
   const deploy = async () => {
     if (!routeId) return;
+    const problems = validateElements(elements);
+    if (problems.length) { notify("error", "无法生效：" + problems.join("；")); return; }
     setBusy(true);
     try {
       const v = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}/versions`,
@@ -1244,10 +1269,13 @@ function App() {
     setBusy(false);
   };
   const createRoute = async (name, tplKey) => {
+    const els = buildTemplate(tplKey);
+    const problems = validateElements(els);
+    if (problems.length) { notify("error", problems.join("；")); return; }
     setBusy(true);
     try {
       const data = await api(`/gw/${encodeURIComponent(gwId)}/routes`,
-        { method: "POST", body: { name, elements: buildTemplate(tplKey) } });
+        { method: "POST", body: { name, elements: els } });
       const newId = objId(data) || name;
       notify("ok", "路由已创建（未部署，点「正式生效」）");
       setModal(null);
