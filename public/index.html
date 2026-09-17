@@ -1031,13 +1031,30 @@ function App() {
     setRoutes(list);
     return list;
   };
+  // 从各种官方响应形状里提取 elements 数组（data 可能是数组，也可能是 JSON 字符串）
+  const extractElements = (obj) => {
+    if (!obj || typeof obj !== "object") return null;
+    if (Array.isArray(obj.elements)) return obj.elements;
+    if (Array.isArray(obj.data)) return obj.data;
+    if (obj.version) {
+      if (Array.isArray(obj.version.elements)) return obj.version.elements;
+      if (Array.isArray(obj.version.data)) return obj.version.data;
+      if (obj.version.data && typeof obj.version.data === "string") {
+        try { const p = JSON.parse(obj.version.data); return Array.isArray(p) ? p : p.elements; } catch (_) {}
+      }
+    }
+    if (obj.data && typeof obj.data === "string") {
+      try { const p = JSON.parse(obj.data); return Array.isArray(p) ? p : p.elements; } catch (_) {}
+    }
+    return null;
+  };
   const selectRoute = async (rid, list) => {
     setRouteId(rid); setSelectedId(null); setView("canvas");
     setRouteDebug(null);
     try {
       const detail = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(rid)}`);
       const r = unwrap(detail) || {};
-      let els = r.elements;
+      let els = extractElements(r);
       const dvid = r.deployment?.version_id || r.deployment?.id || r.version?.version_id || null;
       let vlist = [];
       try {
@@ -1046,20 +1063,19 @@ function App() {
       } catch (e) {
         notify("error", "拉取版本列表失败：" + e.message);
       }
-      // 如果路由详情没有 elements，取「已部署版本」或「最新版本」的详情兜底
+      // 如果路由详情没有 elements，从版本列表里找已部署版本的 data，再不行拉版本详情兜底
       if (!els) {
         const targetVid = dvid || (vlist[0] && vlist[0].id);
         if (targetVid) {
-          try {
-            const vd = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(rid)}/versions/${encodeURIComponent(targetVid)}`);
-            const ver = unwrap(vd) || {};
-            els = ver.elements;
-            // 某些响应把 elements 放在 data 字符串里（JSON）
-            if (!els && ver.data && typeof ver.data === "string") {
-              try { els = JSON.parse(ver.data).elements; } catch (_) {}
+          const deployedVersion = vlist.find((v) => v.id === targetVid);
+          els = extractElements(deployedVersion);
+          if (!els) {
+            try {
+              const vd = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(rid)}/versions/${encodeURIComponent(targetVid)}`);
+              els = extractElements(unwrap(vd));
+            } catch (e) {
+              notify("error", "拉取版本详情失败：" + e.message);
             }
-          } catch (e) {
-            notify("error", "拉取版本详情失败：" + e.message);
           }
         }
       }
