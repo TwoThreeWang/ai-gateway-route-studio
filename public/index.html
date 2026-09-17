@@ -118,10 +118,12 @@ const elType = (e) => {
 // ── outputs 解析（官方结构：命名键对象 {"success":{elementId},"fallback":{...}}；兼容旧数组结构）──
 const OUT_LABELS = { next: "继续", true: "满足", false: "不满足", success: "正常", fallback: "出错" };
 const outLabel = (k) => OUT_LABELS[k] || (/%$/.test(String(k)) ? k : String(k));
+// outputs 的目标可能是 {elementId}（实测）或 {next:{elementId}}（旧文档示例）
+const targetOf = (v) => v?.elementId || v?.next?.elementId || null;
 function outEntries(el) {
   const o = el.outputs || {};
-  if (Array.isArray(o)) return o.map((x, i) => ({ key: i === 0 ? "success" : "fallback", target: x?.next?.elementId || null }));
-  return Object.keys(o).map((k) => ({ key: k, target: o[k]?.next?.elementId || null }));
+  if (Array.isArray(o)) return o.map((x, i) => ({ key: i === 0 ? "success" : "fallback", target: targetOf(x) }));
+  return Object.keys(o).map((k) => ({ key: k, target: targetOf(o[k]) }));
 }
 // 节点应显示的输出口：类型默认口 + 已有口合并（未连线的口也要能"插入节点"）
 function outPorts(el) {
@@ -1138,7 +1140,7 @@ function App() {
       const src = els.find((e) => e.id === srcId);
       if (!src) return els;
       const outs = { ...(src.outputs || {}) };
-      let oldNext = outs[outKey]?.next?.elementId || null;
+      let oldNext = targetOf(outs[outKey]) || null;
       // 在空的「出错/不满足」口插入时，新节点主出口接管主口下游，形成兜底链
       if (!oldNext && outKey !== "next" && outKey !== "success") {
         oldNext = outEntries(src).find(({ key }) => key === "success" || key === "next")?.target || null;
@@ -1159,7 +1161,7 @@ function App() {
         .map((e) => {
           const outputs = {};
           Object.entries(e.outputs || {}).forEach(([k, v]) => {
-            const t = v?.next?.elementId;
+            const t = targetOf(v);
             if (t === elId) { if (firstOut) outputs[k] = { elementId: firstOut }; }
             else if (v) outputs[k] = v;
           });
