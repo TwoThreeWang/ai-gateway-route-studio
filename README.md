@@ -77,6 +77,11 @@ git push -u origin main
 | Secret | `CF_API_TOKEN` | Cloudflare API Token | 需要 **AI Gateway:Edit** + **Account Settings:Read** 权限 |
 | Secret | `OPENAI_API_KEY` 等 | 各厂商密钥 | 可选，配了才能在线拉取模型列表 |
 
+> ⚠️ **密钥务必选 Secret 类型，不要选 Text**：
+> - **Text 变量**每次部署都会被仓库里的 `wrangler.jsonc` 覆盖——Dashboard 里设置但配置文件里没有的 Text 变量会被删掉。
+> - **Secret 类型永不被部署清除**（官方保证）。
+> - 本项目已在 `wrangler.jsonc` 里加了 `keep_vars: true`，Dashboard 的 Text 变量也会保留；但密钥仍建议用 Secret 类型（值不可见，更安全）。
+
 配置完**重新部署一次**（Deployments → 上一次成功构建 → Retry，或 push 一个空提交）让 Secret 生效。
 
 ### 第 4 步：访问
