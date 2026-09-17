@@ -96,10 +96,10 @@ git push -u origin main
 
 ```bash
 npx wrangler login
-# 编辑 wrangler.jsonc 里的 ACCOUNT_ID
+npx wrangler vars put ACCOUNT_ID           # 账户 ID（dash 右侧栏可查；一次设置即可，keep_vars 会保留）
 npx wrangler secret put ADMIN_TOKEN      # 管理台访问口令
 npx wrangler secret put CF_API_TOKEN     # API Token：AI Gateway:Edit + Account Settings:Read
-npx wrangler secret put OPENAI_API_KEY   # 可选：拉取模型列表（其他厂商同理）
+npx wrangler secret put OPENAI_API_KEY   # 可选：拉取模型列表（一般无需配置，会自动走网关 BYOK）
 npx wrangler deploy
 ```
 

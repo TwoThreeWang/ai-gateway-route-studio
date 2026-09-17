@@ -141,7 +141,7 @@ async function handle(request, env) {
 
     if (!env.CF_API_TOKEN) return json({ error: "Worker 未配置 CF_API_TOKEN（wrangler secret put CF_API_TOKEN）" }, 500);
     const acc = env.ACCOUNT_ID;
-    if (!acc || acc.includes("替换")) return json({ error: "未配置 ACCOUNT_ID（编辑 wrangler.jsonc 里的 vars）" }, 500);
+    if (!acc || acc.includes("替换")) return json({ error: "未配置 ACCOUNT_ID（请在 Workers Dashboard → Variables and Secrets 里添加 ACCOUNT_ID 文本变量）" }, 500);
 
     try {
       // GET /api/meta — 账户 + 网关列表（兼容 result 与 data 两种信封）
@@ -184,9 +184,10 @@ async function handle(request, env) {
       }
 
       // /api/gw/:gw/... — 网关与动态路由
-      const mGw = path.match(/^\/api\/gw\/([^/]+)(\/routes(?:\/([^/]+))?(\/(versions|deployments))?)?$/);
+      // 支持：/routes /routes/:rid /routes/:rid/versions /routes/:rid/versions/:vid /routes/:rid/deployments /routes/:rid/deployments/:did
+      const mGw = path.match(/^\/api\/gw\/([^/]+)(\/routes(?:\/([^/]+))?(\/(versions|deployments)(?:\/([^/]+))?)?)?$/);
       if (mGw) {
-        const gw = mGw[1], rid = mGw[3], sub = mGw[4];
+        const gw = mGw[1], rid = mGw[3], sub = mGw[5], subId = mGw[6];
         const base = `/accounts/${acc}/ai-gateway/gateways/${encodeURIComponent(gw)}`;
 
         // 网关设置（GET / PUT 网关对象本身）
@@ -232,26 +233,40 @@ async function handle(request, env) {
         }
 
         if (rid && sub === "versions") {
-          if (request.method === "GET") {
-            const { status, data } = await cf(env, `${base}/routes/${encodeURIComponent(rid)}/versions`);
-            return upstream(data, status);
-          }
-          if (request.method === "POST") {
-            const body = await request.json().catch(() => ({})); // {elements}
-            const { status, data } = await cf(env, `${base}/routes/${encodeURIComponent(rid)}/versions`, { method: "POST", body });
-            return upstream(data, status);
+          if (!subId) {
+            if (request.method === "GET") {
+              const { status, data } = await cf(env, `${base}/routes/${encodeURIComponent(rid)}/versions`);
+              return upstream(data, status);
+            }
+            if (request.method === "POST") {
+              const body = await request.json().catch(() => ({})); // {elements}
+              const { status, data } = await cf(env, `${base}/routes/${encodeURIComponent(rid)}/versions`, { method: "POST", body });
+              return upstream(data, status);
+            }
+          } else {
+            if (request.method === "GET") {
+              const { status, data } = await cf(env, `${base}/routes/${encodeURIComponent(rid)}/versions/${encodeURIComponent(subId)}`);
+              return upstream(data, status);
+            }
           }
         }
 
         if (rid && sub === "deployments") {
-          if (request.method === "GET") {
-            const { status, data } = await cf(env, `${base}/routes/${encodeURIComponent(rid)}/deployments`);
-            return upstream(data, status);
-          }
-          if (request.method === "POST") {
-            const body = await request.json().catch(() => ({})); // {version_id}
-            const { status, data } = await cf(env, `${base}/routes/${encodeURIComponent(rid)}/deployments`, { method: "POST", body });
-            return upstream(data, status);
+          if (!subId) {
+            if (request.method === "GET") {
+              const { status, data } = await cf(env, `${base}/routes/${encodeURIComponent(rid)}/deployments`);
+              return upstream(data, status);
+            }
+            if (request.method === "POST") {
+              const body = await request.json().catch(() => ({})); // {version_id}
+              const { status, data } = await cf(env, `${base}/routes/${encodeURIComponent(rid)}/deployments`, { method: "POST", body });
+              return upstream(data, status);
+            }
+          } else {
+            if (request.method === "GET") {
+              const { status, data } = await cf(env, `${base}/routes/${encodeURIComponent(rid)}/deployments/${encodeURIComponent(subId)}`);
+              return upstream(data, status);
+            }
           }
         }
       }
