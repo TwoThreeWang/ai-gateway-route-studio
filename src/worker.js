@@ -96,8 +96,10 @@ export default {
 
     // ── 静态资源 / 应用外壳（需登录） ──
     if (!path.startsWith("/api/")) {
-      if (!(await isAuthed(request, env))) {
-        // 未登录一律回登录页（静态资源也保护）
+      // 登录页自身依赖的资源放行（logo 等），否则未登录时 logo 请求会被重定向成 HTML 导致裂图
+      const isPublic = path === "/login.html" || path === "/favicon.ico" || path.startsWith("/assets/");
+      if (!isPublic && !(await isAuthed(request, env))) {
+        // 未登录一律回登录页
         return env.ASSETS.fetch(new URL("/login.html", url.origin));
       }
       return env.ASSETS.fetch(request);

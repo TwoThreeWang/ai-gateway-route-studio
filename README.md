@@ -3,6 +3,28 @@
 部署在 Cloudflare Workers 上的 AI Gateway 动态路由管理台：登录门 + API 反代 + 可视化流程图。
 所有数据来自真实接口（`api.cloudflare.com`），API Token 存在 Worker Secret 里，浏览器拿不到。
 
+## 界面预览
+
+**流程画布** —— 节点即配置，右侧表单即改即见（付费分层：条件 → 限额 → 模型 → 结束）：
+
+![流程画布](docs/screenshots/canvas-paid.png)
+
+**故障兜底** —— 模型节点双出口（正常 → 结束 / 出错 → 备用模型自动接管）：
+
+![故障兜底](docs/screenshots/canvas-fallback.png)
+
+**新建路由** —— 4 个大白话模板起步，创建后每个节点都能改：
+
+![新建路由模板](docs/screenshots/templates.png)
+
+**网关设置** —— 覆盖全部 API 可配置项，每项标注对应字段名：
+
+![网关设置](docs/screenshots/gateway-settings.png)
+
+**登录门** —— 整站口令保护，Token 只存在 Worker Secret：
+
+![登录页](docs/screenshots/login.png)
+
 ## 功能
 
 - 多网关切换（来自 `GET /accounts/{id}/ai-gateway/gateways`）
