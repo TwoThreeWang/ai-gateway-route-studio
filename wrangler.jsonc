@@ -12,10 +12,10 @@
     "binding": "ASSETS",
     "run_worker_first": true
   },
-  // ↓↓ 改成你的 Cloudflare 账户 ID（非敏感，可直接写在文件里；私有仓库不泄露）
-  //    在这里写死后，Dashboard 里就不用再配 ACCOUNT_ID 了
+  // 账户 ID（非敏感，网关调用 URL 里本来就含此 ID；私有仓库无风险）
+  // 写死后 Dashboard 里无需再配 ACCOUNT_ID，部署也不会再被覆盖
   "vars": {
-    "ACCOUNT_ID": "替换为你的账户ID"
+    "ACCOUNT_ID": "d2fee57c34c53ed8eb799795cd106648"
   }
   // 敏感信息用 secret（不要写在这里）。两种配置方式任选：
   //   GitHub 部署：Dashboard → 该 Worker → Settings → Variables and Secrets → Add（类型必须选 Secret）
