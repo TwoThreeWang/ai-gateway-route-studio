@@ -83,8 +83,9 @@ function highlightJson(obj) {
 }
 // 归一化 API 列表返回
 function pickList(data) {
+  if (Array.isArray(data?.result)) return data.result;
+  if (Array.isArray(data)) return data;
   const r = data?.result;
-  if (Array.isArray(r)) return r;
   return r?.routes || r?.versions || r?.deployments || r?.data?.routes || r?.data || [];
 }
 const elType = (e) => NODE_META[e?.type] ? e.type : "unknown";
@@ -237,7 +238,7 @@ function TopBar({ gws, gwId, dirty, onDeploy, onHelp, onSwitchGw, onGwSettings }
 }
 
 /* ───── 左侧路由列表 ───── */
-function Sidebar({ routes, routeId, onSelect, onNew }) {
+function Sidebar({ routes, routeId, onSelect, onNew, gwId, routesRaw }) {
   return (
     <div style={{ width: 264, background: C.panel, borderRight: `1px solid ${C.line}`, display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "14px 14px 6px", fontSize: 11, color: C.ink3, letterSpacing: "0.08em", fontWeight: 700 }}>
@@ -263,7 +264,22 @@ function Sidebar({ routes, routeId, onSelect, onNew }) {
         })}
         {routes.length === 0 && (
           <div style={{ padding: "20px 14px", fontSize: 12, color: C.ink3, lineHeight: 1.8 }}>
+            <div style={{ marginBottom: 8 }}>
+              当前网关：<span className="mono" style={{ color: C.ink2 }}>{gwId || "—"}</span><br/>
+              顶部下拉切换到有路由的网关试试。
+            </div>
             这个网关还没有动态路由。<br/>点下方「新建路由」创建第一条。
+            {routesRaw !== null && (
+              <details style={{ marginTop: 10, fontSize: 10.5 }}>
+                <summary style={{ cursor: "pointer", color: C.orangeDark }}>查看接口原始返回（排查用）</summary>
+                <pre className="mono" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all",
+                  background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: 8,
+                  maxHeight: 220, overflow: "auto", marginTop: 6 }}>
+                  {JSON.stringify(routesRaw, null, 2)}
+                </pre>
+                如果这里不是包含路由数组的结构，把这段 JSON 发给开发者即可适配。
+              </details>
+            )}
           </div>
         )}
       </div>
@@ -836,6 +852,7 @@ function App() {
   const [gws, setGws] = useState([]);
   const [gwId, setGwId] = useState(null);
   const [routes, setRoutes] = useState([]);          // 当前网关的路由列表（归一化）
+  const [routesRaw, setRoutesRaw] = useState(null);  // 路由列表接口原始返回（排查结构用）
   const [routeId, setRouteId] = useState(null);      // 当前路由的 API id
   const [routeName, setRouteName] = useState("");
   const [elements, setElements] = useState([]);      // 当前路由的 elements（工作副本）
@@ -864,6 +881,7 @@ function App() {
 
   const loadRoutes = async (id) => {
     const data = await api("/gw/" + encodeURIComponent(id) + "/routes");
+    setRoutesRaw(data);
     const list = pickList(data).map((r) => ({ id: r.id, name: r.name || r.id, raw: r }));
     setRoutes(list);
     return list;
@@ -1077,7 +1095,7 @@ function App() {
         onHelp={() => setModal("help")} onSwitchGw={switchGw} onGwSettings={async () => { await loadGwSettings(gwId); setModal("settings"); }} />
       {toast && <Toast toast={toast} />}
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        <Sidebar routes={routes} routeId={routeId}
+        <Sidebar routes={routes} routeId={routeId} gwId={gwId} routesRaw={routesRaw}
           onSelect={(rid) => selectRoute(rid)} onNew={() => setModal("new")} />
         {routeId ? (
           <>
