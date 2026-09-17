@@ -299,7 +299,7 @@ function Toast({ toast }) {
 }
 
 /* ───── 顶部栏 ───── */
-function TopBar({ gws, gwId, dirty, onDeploy, onHelp, onSwitchGw, onGwSettings }) {
+function TopBar({ gws, gwId, dirty, draft, onDeploy, onHelp, onSwitchGw, onGwSettings }) {
   const [open, setOpen] = useState(false);
   return (
     <div style={{ height: 56, background: C.panel, borderBottom: `1px solid ${C.line}`,
@@ -342,11 +342,14 @@ function TopBar({ gws, gwId, dirty, onDeploy, onHelp, onSwitchGw, onGwSettings }
         borderRadius: 7, padding: "7px 14px" }}>? 使用说明</button>
       <button onClick={onGwSettings} style={{ fontSize: 12.5, color: C.ink2, border: `1px solid ${C.line}`,
         borderRadius: 7, padding: "7px 14px" }}>⚙ 网关设置</button>
+      {draft && <div style={{ fontSize: 11.5, color: C.orangeDark, background: "#FEF3EB",
+        border: "1px solid #F8C79B", borderRadius: 6, padding: "5px 10px" }}>● 新路由草稿，还没创建</div>}
       {dirty && <div style={{ fontSize: 11.5, color: C.orangeDark, background: "#FEF3EB",
         border: "1px solid #F8C79B", borderRadius: 6, padding: "5px 10px" }}>● 改过了，还没生效</div>}
-      <button onClick={onDeploy} style={{ background: C.orange, color: "#fff", fontWeight: 700,
-        fontSize: 13.5, padding: "9px 20px", borderRadius: 7, boxShadow: "0 1px 2px rgba(246,130,31,.35)" }}>
-        正式生效
+      <button onClick={onDeploy} disabled={!onDeploy} style={{ background: C.orange, color: "#fff", fontWeight: 700,
+        fontSize: 13.5, padding: "9px 20px", borderRadius: 7, boxShadow: "0 1px 2px rgba(246,130,31,.35)",
+        opacity: onDeploy ? 1 : 0.5 }}>
+        {draft ? "创建并生效" : "正式生效"}
       </button>
     </div>
   );
@@ -895,6 +898,9 @@ function NewRouteModal({ onClose, onCreate, busy }) {
               borderRadius: 7, background: C.bg }} placeholder="例如: support"
               value={name} onChange={(e) => setName(e.target.value)} />
           </div>
+          <div style={{ fontSize: 11, color: C.ink3, marginTop: 8, lineHeight: 1.6 }}>
+            点「进入编辑」不会向 Cloudflare 提交任何数据——先在画布里把流程改好，再点右上角「创建并生效」才会真正创建。
+          </div>
         </div>
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 20 }}>
           <button onClick={onClose} style={{ padding: "9px 18px", borderRadius: 8,
@@ -902,7 +908,7 @@ function NewRouteModal({ onClose, onCreate, busy }) {
           <button onClick={() => onCreate(clean, tpl)} disabled={busy || !clean}
             style={{ padding: "9px 24px", borderRadius: 8, background: C.orange, color: "#fff",
               fontWeight: 700, fontSize: 13.5, opacity: busy || !clean ? 0.5 : 1 }}>
-            {busy ? "创建中…" : "创建路由"}
+            进入编辑
           </button>
         </div>
       </div>
@@ -1026,7 +1032,7 @@ function HelpDrawer({ onClose }) {
           <button onClick={onClose} style={{ fontSize: 18, color: C.ink3 }}>×</button>
         </div>
         <div style={item}><div style={k}>三步上手</div>
-          <div style={v}>① 左下角「＋ 新建路由」选模板；② 点节点改设置（或切「代码」页直接改 JSON）；③ 点「正式生效」——会真实创建版本并部署。</div></div>
+          <div style={v}>① 左下角「＋ 新建路由」选模板 →「进入编辑」（此时不提交任何数据）；② 在画布上改节点（或切「代码」页直接改 JSON）；③ 点右上角「创建并生效 / 正式生效」——新路由此时才真正创建，已有路由会创建新版本并部署。</div></div>
         <div style={item}><div style={k}>加 / 删节点</div>
           <div style={v}>悬停节点右侧橙点出现 ⊕，点选类型即在后面插入并自动接线；删除在右边栏底部，连线自动绕接。</div></div>
         <div style={item}><div style={k}>版本与回滚</div>
@@ -1070,6 +1076,7 @@ function App() {
   const [pulledFrom, setPulledFrom] = useState(null);
   const [routeDebug, setRouteDebug] = useState(null); // 当前路由 API 原始返回（排查空白画布用）
   const [nodePositions, setNodePositions] = useState({}); // 用户手动拖动的节点位置
+  const [draftName, setDraftName] = useState(null);   // 新路由草稿名（非 null 表示正在编辑未创建的新路由）
   const toastT = useRef(null);
 
   const notify = (type, msg) => {
@@ -1104,7 +1111,7 @@ function App() {
   };
   const selectRoute = async (rid, list) => {
     setRouteId(rid); setSelectedId(null); setView("canvas");
-    setRouteDebug(null); setNodePositions({});
+    setRouteDebug(null); setNodePositions({}); setDraftName(null);
     try {
       const detail = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(rid)}`);
       const r = unwrap(detail) || {};
@@ -1146,7 +1153,7 @@ function App() {
     }
   };
   const switchGw = async (id) => {
-    setGwId(id); setRouteId(null); setSelectedId(null); setElements([]); setVersions([]); setNodePositions({}); setLoading(true);
+    setGwId(id); setRouteId(null); setSelectedId(null); setElements([]); setVersions([]); setNodePositions({}); setDraftName(null); setLoading(true);
     try { await loadRoutes(id); } catch (e) { notify("error", e.message); }
     setLoading(false);
   };
@@ -1235,27 +1242,56 @@ function App() {
       setView("canvas");
     } catch (e) { notify("error", "JSON 解析失败：" + e.message); }
   };
+  const apiErr = (e, fallback) => {
+    let msg = e.message || fallback;
+    if (e.body && typeof e.body === "object") {
+      console.error("Cloudflare API 错误响应：", JSON.stringify(e.body, null, 2));
+      const first = (e.body.errors || [])[0];
+      if (first?.message) msg = `${first.message}${first.path ? "（" + first.path.join(" · ") + "）" : ""}`;
+      msg += "；完整响应已输出到浏览器控制台";
+    }
+    return msg;
+  };
   const deploy = async () => {
-    if (!routeId) return;
     const problems = validateElements(elements);
     if (problems.length) { notify("error", "无法生效：" + problems.join("；")); return; }
     setBusy(true);
     try {
-      const v = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}/versions`,
-        { method: "POST", body: { elements } });
-      const vid = objId(v);
-      if (!vid) throw new Error("创建版本失败：" + JSON.stringify(v?.errors || v).slice(0, 120));
-      await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}/deployments`,
-        { method: "POST", body: { version_id: vid } });
-      notify("ok", "已部署，立即生效");
-      setModal(null);
-      setLastSaved(JSON.stringify(elements));
-      const detail = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}`);
-      const dr = unwrap(detail) || {};
-      setDeployedVid(dr.deployment?.version_id || dr.deployment?.id || vid);
-      const vdata = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}/versions`);
-      setVersions(normVersions(pickList(vdata)));
-    } catch (e) { notify("error", e.message); }
+      if (draftName && !routeId) {
+        // 新路由草稿：此时才真正创建（POST /routes 携带编辑好的 elements）
+        const data = await api(`/gw/${encodeURIComponent(gwId)}/routes`,
+          { method: "POST", body: { name: draftName, elements } });
+        const newId = objId(data) || draftName;
+        const detail = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(newId)}`);
+        const r = unwrap(detail) || {};
+        const dvid = r.deployment?.version_id || r.deployment?.id || r.version?.version_id || null;
+        if (!r.deployment?.deployment_id && dvid) {
+          await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(newId)}/deployments`,
+            { method: "POST", body: { version_id: dvid } });
+        }
+        setDraftName(null);
+        const list = await loadRoutes(gwId);
+        setRouteId(newId);
+        await selectRoute(newId, list);
+        notify("ok", "路由已创建并生效");
+      } else {
+        if (!routeId) return;
+        const v = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}/versions`,
+          { method: "POST", body: { elements } });
+        const vid = objId(v);
+        if (!vid) throw new Error("创建版本失败：" + JSON.stringify(v?.errors || v).slice(0, 120));
+        await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}/deployments`,
+          { method: "POST", body: { version_id: vid } });
+        notify("ok", "已部署，立即生效");
+        setModal(null);
+        setLastSaved(JSON.stringify(elements));
+        const detail = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}`);
+        const dr = unwrap(detail) || {};
+        setDeployedVid(dr.deployment?.version_id || dr.deployment?.id || vid);
+        const vdata = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}/versions`);
+        setVersions(normVersions(pickList(vdata)));
+      }
+    } catch (e) { notify("error", apiErr(e, "部署失败")); }
     setBusy(false);
   };
   const rollback = async (vid) => {
@@ -1268,32 +1304,24 @@ function App() {
     } catch (e) { notify("error", e.message); }
     setBusy(false);
   };
-  const createRoute = async (name, tplKey) => {
+  // 新建路由：模板只加载进本地画布（草稿），不调任何 API；点「创建并生效」才提交
+  const startDraft = (name, tplKey) => {
     const els = buildTemplate(tplKey);
     const problems = validateElements(els);
     if (problems.length) { notify("error", problems.join("；")); return; }
-    setBusy(true);
-    try {
-      const data = await api(`/gw/${encodeURIComponent(gwId)}/routes`,
-        { method: "POST", body: { name, elements: els } });
-      const newId = objId(data) || name;
-      notify("ok", "路由已创建（未部署，点「正式生效」）");
-      setModal(null);
-      const list = await loadRoutes(gwId);
-      setRouteId(newId);
-      await selectRoute(newId, list);
-    } catch (e) {
-      let msg = e.message || "创建路由失败";
-      if (e.body && typeof e.body === "object") {
-        const detail = JSON.stringify(e.body, null, 2);
-        console.error("创建路由 400 响应：", detail);
-        msg += "；完整响应已输出到浏览器控制台";
-      }
-      notify("error", msg);
-    }
-    setBusy(false);
+    setDraftName(name); setRouteId(null); setSelectedId(null);
+    setElements(els); setLastSaved(JSON.stringify(els));
+    setVersions([]); setDeployedVid(null); setRouteDebug(null); setNodePositions({});
+    setRouteName(name); setJsonDraft(JSON.stringify(els, null, 2));
+    setView("canvas"); setModal(null);
+    notify("ok", "草稿已就绪（尚未提交），编辑完点右上角「创建并生效」");
   };
   const deleteRoute = async () => {
+    if (draftName && !routeId) { // 草稿没有服务端对象，直接丢弃即可
+      setDraftName(null); setElements([]); setSelectedId(null); setModal(null); setRouteName("");
+      notify("ok", "已放弃草稿");
+      return;
+    }
     setBusy(true);
     try {
       await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}`, { method: "DELETE" });
@@ -1348,13 +1376,14 @@ function App() {
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <TopBar gws={gws} gwId={gwId} dirty={dirty} onDeploy={routeId ? () => setModal("deploy") : undefined}
+      <TopBar gws={gws} gwId={gwId} dirty={dirty} draft={!!draftName}
+        onDeploy={routeId || draftName ? (draftName && !routeId ? deploy : () => setModal("deploy")) : undefined}
         onHelp={() => setModal("help")} onSwitchGw={switchGw} onGwSettings={async () => { await loadGwSettings(gwId); setModal("settings"); }} />
       {toast && <Toast toast={toast} />}
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <Sidebar routes={routes} routeId={routeId} gwId={gwId} routesRaw={routesRaw}
           onSelect={(rid) => selectRoute(rid)} onNew={() => setModal("new")} />
-        {routeId ? (
+        {(routeId || draftName) ? (
           <>
             <Canvas graph={graph} selectedId={selectedId} onSelect={setSelectedId} onInsert={insertAfter}
               onNodeMove={moveNode}
@@ -1393,7 +1422,7 @@ function App() {
       {modal === "deploy" && routeId && (
         <DeployModal routeName={routeName} onClose={() => setModal(null)} onConfirm={deploy} busy={busy} />
       )}
-      {modal === "new" && <NewRouteModal onClose={() => setModal(null)} onCreate={createRoute} busy={busy} />}
+      {modal === "new" && <NewRouteModal onClose={() => setModal(null)} onCreate={startDraft} busy={busy} />}
       {modal === "help" && <HelpDrawer onClose={() => setModal(null)} />}
       {modal === "settings" && (
         <GatewaySettingsModal gwId={gwId} gwRaw={gwRaw} onClose={() => setModal(null)} onSave={saveSettings} busy={busy} />
