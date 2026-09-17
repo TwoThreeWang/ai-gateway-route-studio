@@ -144,10 +144,11 @@ async function handle(request, env) {
     if (!acc || acc.includes("替换")) return json({ error: "未配置 ACCOUNT_ID（编辑 wrangler.jsonc 里的 vars）" }, 500);
 
     try {
-      // GET /api/meta — 账户 + 网关列表
+      // GET /api/meta — 账户 + 网关列表（兼容 result 与 data 两种信封）
       if (path === "/api/meta") {
         const { status, data } = await cf(env, `/accounts/${acc}/ai-gateway/gateways?per_page=50`);
-        const gateways = (data && (data.result || [])) || [];
+        const raw = data && (data.result !== undefined ? data.result : (data.data !== undefined ? data.data : []));
+        const gateways = (Array.isArray(raw) ? raw : (raw?.gateways || [])) || [];
         return json({ ok: true, accountId: acc, gateways: gateways.map((g) => ({ id: g.id, created_at: g.created_at })), upstreamStatus: status, upstreamError: !data?.success ? data?.errors : null });
       }
 

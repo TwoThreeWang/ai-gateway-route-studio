@@ -81,13 +81,34 @@ function highlightJson(obj) {
   }
   return out + src.slice(last);
 }
+// ── 响应信封解包 ──
+// 真实 API 有两种信封：旧文档风格 {result: X} 与实际返回的 {data: {routes|versions|route|version|...}}
+function unwrap(data, kind) {
+  if (!data || typeof data !== "object") return undefined;
+  if (data.result !== undefined) return data.result;
+  const d = data.data;
+  if (d && typeof d === "object") {
+    if (kind && Array.isArray(d[kind])) return d[kind];
+    if (!kind) {
+      if (d.route) return d.route;
+      if (d.version) return d.version;
+      return d;
+    }
+  }
+  return undefined;
+}
+// 从各类响应里提取对象 id（兼容 id / version_id / 嵌套）
+const objId = (o) => o?.id || o?.version_id || o?.version?.version_id || o?.route?.id
+  || o?.data?.id || o?.data?.version_id || o?.data?.route?.id || o?.result?.id || o?.result?.version_id;
 // 归一化 API 列表返回
 function pickList(data) {
-  if (Array.isArray(data?.result)) return data.result;
   if (Array.isArray(data)) return data;
-  const r = data?.result;
-  return r?.routes || r?.versions || r?.deployments || r?.data?.routes || r?.data || [];
+  const u = unwrap(data);
+  if (Array.isArray(u)) return u;
+  return u?.routes || u?.versions || u?.deployments || [];
 }
+// 版本列表归一化：真实 API 用 version_id 而非 id
+const normVersions = (list) => (list || []).map((v) => ({ ...v, id: v.id || v.version_id }));
 const elType = (e) => NODE_META[e?.type] ? e.type : "unknown";
 function elLines(e) {
   const p = e.properties || {};
@@ -890,18 +911,18 @@ function App() {
     setRouteId(rid); setSelectedId(null); setView("canvas");
     try {
       const detail = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(rid)}`);
-      const r = detail?.result || {};
+      const r = unwrap(detail) || {};
       let els = r.elements;
-      const dvid = r.deployment?.version_id || r.deployment?.id || null;
+      const dvid = r.deployment?.version_id || r.deployment?.id || r.version?.version_id || null;
       let vlist = [];
       try {
         const vdata = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(rid)}/versions`);
-        vlist = pickList(vdata);
+        vlist = normVersions(pickList(vdata));
       } catch (e) {}
       if (!els && vlist.length) {
         try {
           const vd = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(rid)}/versions/${encodeURIComponent(vlist[0].id)}`);
-          els = vd?.result?.elements || [];
+          els = unwrap(vd)?.elements || unwrap(vd)?.route?.elements || [];
         } catch (e) {}
       }
       els = els || [];
@@ -923,7 +944,7 @@ function App() {
   const loadGwSettings = async (id) => {
     try {
       const data = await api("/gw/" + encodeURIComponent(id));
-      setGwRaw(data?.result || {});
+      setGwRaw(unwrap(data) || {});
     } catch (e) { setGwRaw({}); notify("error", e.message); }
   };
 
@@ -1006,7 +1027,7 @@ function App() {
     try {
       const v = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}/versions`,
         { method: "POST", body: { elements } });
-      const vid = v?.result?.id || v?.result?.version_id;
+      const vid = objId(v);
       if (!vid) throw new Error("创建版本失败：" + JSON.stringify(v?.errors || v).slice(0, 120));
       await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}/deployments`,
         { method: "POST", body: { version_id: vid } });
@@ -1014,9 +1035,10 @@ function App() {
       setModal(null);
       setLastSaved(JSON.stringify(elements));
       const detail = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}`);
-      setDeployedVid(detail?.result?.deployment?.version_id || detail?.result?.deployment?.id || vid);
+      const dr = unwrap(detail) || {};
+      setDeployedVid(dr.deployment?.version_id || dr.deployment?.id || vid);
       const vdata = await api(`/gw/${encodeURIComponent(gwId)}/routes/${encodeURIComponent(routeId)}/versions`);
-      setVersions(pickList(vdata));
+      setVersions(normVersions(pickList(vdata)));
     } catch (e) { notify("error", e.message); }
     setBusy(false);
   };
@@ -1035,7 +1057,7 @@ function App() {
     try {
       const data = await api(`/gw/${encodeURIComponent(gwId)}/routes`,
         { method: "POST", body: { name, elements: buildTemplate(tplKey) } });
-      const newId = data?.result?.id || name;
+      const newId = objId(data) || name;
       notify("ok", "路由已创建（未部署，点「正式生效」）");
       setModal(null);
       const list = await loadRoutes(gwId);
