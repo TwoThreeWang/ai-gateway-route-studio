@@ -61,7 +61,10 @@ async function api(path, opts = {}) {
   try { data = await res.json(); } catch (e) {}
   if (!res.ok) {
     const msg = data?.error || data?.errors?.[0]?.message || ("请求失败（" + res.status + "）");
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = res.status;
+    err.body = data;
+    throw err;
   }
   return data;
 }
@@ -222,6 +225,8 @@ const portY = (node, idx) => node.y + ((idx + 1) * node.h) / (outPorts(node.el).
 const inY = (node) => node.y + node.h / 2;
 
 /* ───── 模板（官方 elements 结构：outputs 为命名键对象） ───── */
+// 默认用 workers-ai 模型：它是 Cloudflare 托管模型，不依赖外部厂商 BYOK，
+// 在 byok_only / authentication 严格网关上创建成功率最高。创建后可在画布上改成任何 provider。
 function buildTemplate(kind) {
   const els = [];
   const add = (id, type, props) => { els.push({ id, type, outputs: {}, ...(props ? { properties: props } : {}) }); return els[els.length - 1]; };
@@ -229,26 +234,26 @@ function buildTemplate(kind) {
   if (kind === "paid") {
     add("e1","start"); add("e2","conditional",{ conditions: { "metadata.plan": { "$eq": "paid" } } });
     add("e3","rate",{ limitType:"cost", key:"metadata.user_id", limit:50, window:2592000 });
-    add("e4","model",{ provider:"openai", model:"gpt-4.1" });
+    add("e4","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.1-8b-instruct" });
     add("e5","rate",{ limitType:"count", key:"metadata.user_id", limit:120, window:3600 });
-    add("e6","model",{ provider:"openai", model:"o4-mini-high" });
+    add("e6","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
     add("e7","end");
     link("e1","next","e2"); link("e2","true","e3"); link("e2","false","e5");
     link("e3","success","e4"); link("e5","success","e6");
     link("e4","success","e7"); link("e6","success","e7");
   } else if (kind === "ab") {
     add("a1","start"); add("a2","percentage");
-    add("a3","model",{ provider:"deepseek", model:"deepseek-chat" }); add("a4","model",{ provider:"openai", model:"gpt-4.1" });
+    add("a3","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.1-8b-instruct" }); add("a4","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
     add("a5","end");
     link("a1","next","a2"); link("a2","10%","a3"); link("a2","90%","a4");
     link("a3","success","a5"); link("a4","success","a5");
   } else if (kind === "limit") {
     add("b1","start"); add("b2","rate",{ limitType:"count", key:"metadata.user_id", limit:60, window:3600 });
-    add("b3","model",{ provider:"openai", model:"gpt-4.1-mini" }); add("b4","end");
+    add("b3","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.1-8b-instruct" }); add("b4","end");
     link("b1","next","b2"); link("b2","success","b3"); link("b3","success","b4");
   } else { // fallback
-    add("f1","start"); add("f2","model",{ provider:"openai", model:"gpt-4.1", timeout:60000, retries:2 });
-    add("f3","model",{ provider:"anthropic", model:"claude-haiku-4" }); add("f4","end");
+    add("f1","start"); add("f2","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.1-8b-instruct", timeout:60000, retries:2 });
+    add("f3","model",{ provider:"workers-ai", model:"@cf/meta/llama-3.3-70b-instruct-fp8-fast" }); add("f4","end");
     els.find((e) => e.id === "f2").outputs = { success: { elementId: "f4" }, fallback: { elementId: "f3" } };
     link("f1","next","f2"); link("f3","success","f4");
   }
@@ -831,7 +836,7 @@ function DeployModal({ routeName, onClose, onConfirm, busy }) {
 function NewRouteModal({ onClose, onCreate, busy }) {
   const [tpl, setTpl] = useState("paid");
   const [name, setName] = useState("");
-  const clean = name.trim().replace(/\s+/g, "-").toLowerCase() || "";
+  const clean = name.trim().toLowerCase().replace(/[^a-z0-9-_]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: "fixed", inset: 0, background: "rgba(24,24,27,.45)",
       display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }}>
@@ -1249,7 +1254,15 @@ function App() {
       const list = await loadRoutes(gwId);
       setRouteId(newId);
       await selectRoute(newId, list);
-    } catch (e) { notify("error", e.message); }
+    } catch (e) {
+      let msg = e.message || "创建路由失败";
+      if (e.body && typeof e.body === "object") {
+        const detail = JSON.stringify(e.body, null, 2);
+        console.error("创建路由 400 响应：", detail);
+        msg += "；完整响应已输出到浏览器控制台";
+      }
+      notify("error", msg);
+    }
     setBusy(false);
   };
   const deleteRoute = async () => {
