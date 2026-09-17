@@ -122,7 +122,10 @@ npx wrangler dev                 # http://localhost:8787
   「代码」页可直接编辑 JSON 兜底。
 - 模型节点多出口（出错→备用）依赖 API 是否支持 model 双输出；fallback 模板创建时
   如被 API 拒绝，可在「代码」页调整。
-- 「拉取全部模型」需要为对应厂商配置密钥（`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、
-  `DEEPSEEK_API_KEY`、`XAI_API_KEY`、`GROQ_API_KEY`、`MISTRAL_API_KEY`、`OPENROUTER_API_KEY`、
-  `MOONSHOT_API_KEY`、`GEMINI_API_KEY` 等），未配置的厂商会提示手动输入。
+- 「拉取全部模型」两种方式（自动选择）：
+  1. Worker 配置了对应厂商密钥（`OPENAI_API_KEY` 等 Secret）→ 直连厂商 API 拉取；
+  2. 未配置 → **走你网关的 BYOK 透传**（`gateway.ai.cloudflare.com/v1/{acc}/{网关}/{厂商}/v1/models`），
+     自动复用你在 AI Gateway → Provider Keys 里存的密钥，**无需再配置任何厂商密钥**。
+     仅当网关开启了认证（Authentication）时才需要额外配 `CF_AIG_TOKEN`（AI Gateway 页面生成的令牌）。
+  某厂商两种方式都不可用时，会提示手动输入模型名。
 - 版本列表字段（id / created_at / active）若与预期不同，前端按归一化尽力渲染。

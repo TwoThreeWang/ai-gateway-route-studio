@@ -5,7 +5,7 @@ ADMIN_TOKEN=dev123
 CF_API_TOKEN=你的Cloudflare_API_Token
 ACCOUNT_ID=替换为你的账户ID
 
-# 可选：拉取各厂商模型列表（不填则该厂商只能手动输入模型名）
+# 可选：拉取各厂商模型列表（不填则自动走网关 BYOK 透传，复用 AI Gateway Provider Keys 里存的密钥）
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 GEMINI_API_KEY=
@@ -16,3 +16,7 @@ GROQ_API_KEY=
 MISTRAL_API_KEY=
 OPENROUTER_API_KEY=
 PERPLEXITY_API_KEY=
+
+# 可选：仅当你的 AI Gateway 开启了认证（Authentication）时需要
+# （在 AI Gateway 页面生成的令牌，不是 Cloudflare API Token）
+CF_AIG_TOKEN=

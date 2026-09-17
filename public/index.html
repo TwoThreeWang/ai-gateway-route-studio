@@ -1051,7 +1051,7 @@ function App() {
   const pullModels = async (provider) => {
     setPulling(true); setPulledFrom(null);
     try {
-      const data = await api("/models/" + encodeURIComponent(provider));
+      const data = await api("/models/" + encodeURIComponent(provider) + "?gw=" + encodeURIComponent(gwId || ""));
       setModels(data.models || []);
       if (data.error) notify("error", data.error);
       else setPulledFrom(provider);

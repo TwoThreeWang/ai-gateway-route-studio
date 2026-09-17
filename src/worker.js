@@ -8,7 +8,8 @@
 
 const CF_API = "https://api.cloudflare.com/client/v4";
 
-// 各厂商模型列表接口（部署后由 Worker 反代；未配置密钥的厂商返回提示）
+// 各厂商模型列表接口（部署后由 Worker 反代）
+// 拉取优先级：① Worker 配了厂商密钥 → 直连厂商 ② 未配 → 走 AI Gateway BYOK 透传（复用网关里存的 Provider Keys，无需再配）
 const MODEL_APIS = {
   openai:       { url: "https://api.openai.com/v1/models",           key: "OPENAI_API_KEY" },
   anthropic:    { url: "https://api.anthropic.com/v1/models",        key: "ANTHROPIC_API_KEY", extra: { "anthropic-version": "2023-06-01" } },
@@ -21,6 +22,12 @@ const MODEL_APIS = {
   openrouter:   { url: "https://openrouter.ai/api/v1/models",        key: "OPENROUTER_API_KEY" },
   perplexity:   { url: "https://api.perplexity.ai/models",           key: "PERPLEXITY_API_KEY" },
 };
+
+// 解析厂商 /models 响应为模型 id 列表
+function parseModels(conf, data) {
+  const models = conf.pick ? conf.pick(data) : (data.data || []).map((m) => m.id).filter(Boolean);
+  return (models || []).sort();
+}
 
 const json = (data, status = 200, headers = {}) =>
   new Response(JSON.stringify(data), {
@@ -144,17 +151,35 @@ async function handle(request, env) {
         return json({ ok: true, accountId: acc, gateways: gateways.map((g) => ({ id: g.id, created_at: g.created_at })), upstreamStatus: status, upstreamError: !data?.success ? data?.errors : null });
       }
 
-      // GET /api/models/:provider — 反代厂商模型列表
+      // GET /api/models/:provider?gw=网关id — 反代厂商模型列表
       const mModel = path.match(/^\/api\/models\/([a-z0-9-]+)$/);
       if (mModel && request.method === "GET") {
+        const gw = url.searchParams.get("gw") || "";
         const conf = MODEL_APIS[mModel[1]];
         if (!conf) return json({ models: [], error: "该厂商暂不支持自动拉取，请直接输入模型名" });
-        const key = env[conf.key];
-        if (!key) return json({ models: [], error: `未配置 ${conf.key}（wrangler secret put ${conf.key}），可手动输入模型名` });
-        const res = await fetch(conf.url, { headers: { Authorization: `Bearer ${key}`, ...(conf.extra || {}) } });
-        const data = await res.json().catch(() => ({}));
-        const models = conf.pick ? conf.pick(data) : (data.data || []).map((m) => m.id).filter(Boolean);
-        return json({ models: (models || []).sort() });
+
+        // ① Worker 配了厂商密钥 → 直连厂商 API
+        if (env[conf.key]) {
+          const res = await fetch(conf.url, { headers: { Authorization: `Bearer ${env[conf.key]}`, ...(conf.extra || {}) } });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) return json({ models: parseModels(conf, data) });
+          return json({ models: [], error: `直连厂商失败（${res.status}），请检查 ${conf.key} 是否有效，或改走网关 BYOK` });
+        }
+
+        // ② 未配密钥 → 走 AI Gateway BYOK 透传：GET https://gateway.ai.cloudflare.com/v1/{acc}/{gw}/{provider}/...
+        //    网关自动注入你在 Provider Keys 里存的密钥（需在网关选择当前网关）
+        if (gw) {
+          const u = new URL(conf.url);
+          const gwUrl = `https://gateway.ai.cloudflare.com/v1/${acc}/${encodeURIComponent(gw)}/${mModel[1]}${u.pathname}`;
+          const gwHeaders = { ...(conf.extra || {}) };
+          if (env.CF_AIG_TOKEN) gwHeaders["cf-aig-authorization"] = `Bearer ${env.CF_AIG_TOKEN}`;
+          const res = await fetch(gwUrl, { headers: gwHeaders });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) return json({ models: parseModels(conf, data), via: "gateway-byok" });
+          return json({ models: [], error: `网关 BYOK 拉取失败（${res.status}）：确认已在 AI Gateway → Provider Keys 配置该厂商密钥${env.CF_AIG_TOKEN ? "" : "；若网关开启了认证，需在 Worker 配置 CF_AIG_TOKEN"}，或直接手动输入模型名` });
+        }
+
+        return json({ models: [], error: `未配置 ${conf.key} 且未指定网关（无法走网关 BYOK），可手动输入模型名` });
       }
 
       // /api/gw/:gw/... — 网关与动态路由
