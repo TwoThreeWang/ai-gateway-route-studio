@@ -76,34 +76,58 @@ function upstream(data, status) {
   });
 }
 
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-    const path = url.pathname;
+async function handle(request, env) {
+  const url = new URL(request.url);
+  const path = url.pathname;
 
-    // ── 登录 ──
-    if (path === "/api/login" && request.method === "POST") {
-      if (!env.ADMIN_TOKEN) return json({ error: "Worker 未配置 ADMIN_TOKEN（wrangler secret put ADMIN_TOKEN）" }, 500);
-      const body = await request.json().catch(() => ({}));
-      if (body.token && body.token === env.ADMIN_TOKEN) {
-        const h = await sha256hex(env.ADMIN_TOKEN);
-        return json({ ok: true }, 200, {
-          "Set-Cookie": `studio=${h}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`,
-        });
-      }
-      return json({ error: "口令错误" }, 401);
-    }
+  // ── 自诊断（公开，只暴露布尔值不泄露内容） ──
+  if (path === "/api/health") {
+    return json({
+      ok: true,
+      time: new Date().toISOString(),
+      bindings: {
+        assets: !!env.ASSETS,
+        adminToken: !!env.ADMIN_TOKEN,
+        cfApiToken: !!env.CF_API_TOKEN,
+        accountIdSet: !!(env.ACCOUNT_ID && !String(env.ACCOUNT_ID).includes("替换")),
+      },
+      hint: "assets=false 说明部署时未应用 wrangler.jsonc 的 assets 配置（常见于在 Dashboard 手动粘贴单文件创建的 Worker），需用仓库完整部署",
+    });
+  }
 
-    // ── 静态资源 / 应用外壳（需登录） ──
-    if (!path.startsWith("/api/")) {
-      // 登录页自身依赖的资源放行（logo 等），否则未登录时 logo 请求会被重定向成 HTML 导致裂图
-      const isPublic = path === "/login.html" || path === "/favicon.ico" || path.startsWith("/assets/");
-      if (!isPublic && !(await isAuthed(request, env))) {
-        // 未登录一律回登录页
-        return env.ASSETS.fetch(new URL("/login.html", url.origin));
-      }
-      return env.ASSETS.fetch(request);
+  // ── 登录 ──
+  if (path === "/api/login" && request.method === "POST") {
+    if (!env.ADMIN_TOKEN) return json({ error: "Worker 未配置 ADMIN_TOKEN（wrangler secret put ADMIN_TOKEN）" }, 500);
+    const body = await request.json().catch(() => ({}));
+    if (body.token && body.token === env.ADMIN_TOKEN) {
+      const h = await sha256hex(env.ADMIN_TOKEN);
+      return json({ ok: true }, 200, {
+        "Set-Cookie": `studio=${h}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`,
+      });
     }
+    return json({ error: "口令错误" }, 401);
+  }
+
+  // ── 静态资源 / 应用外壳（需登录） ──
+  if (!path.startsWith("/api/")) {
+    // ASSETS 绑定缺失（如 Dashboard 手动建 Worker 未带 assets 配置）→ 给出明确报错而不是 1101
+    if (!env.ASSETS) {
+      return new Response(
+        "ASSETS 绑定缺失（Error 1101 的常见原因）。\n" +
+        "原因：部署时未应用 wrangler.jsonc 的 assets 配置，常见于在 Dashboard 手动粘贴单文件创建的 Worker。\n" +
+        "修复：用 GitHub 连接部署（Workers Builds 会按仓库里的 wrangler.jsonc 部署），或本地在 worker/ 目录执行 npx wrangler deploy。\n" +
+        "自检：访问 /api/health 查看各绑定状态。",
+        { status: 500, headers: { "content-type": "text/plain; charset=utf-8" } }
+      );
+    }
+    // 登录页自身依赖的资源放行（logo 等），否则未登录时 logo 请求会被重定向成 HTML 导致裂图
+    const isPublic = path === "/login.html" || path === "/favicon.ico" || path.startsWith("/assets/");
+    if (!isPublic && !(await isAuthed(request, env))) {
+      // 未登录一律回登录页
+      return env.ASSETS.fetch(new URL("/login.html", url.origin));
+    }
+    return env.ASSETS.fetch(request);
+  }
 
     // ── API 鉴权 ──
     if (!(await isAuthed(request, env))) return json({ error: "未登录" }, 401);
@@ -209,6 +233,18 @@ export default {
       return json({ error: "未知接口：" + path }, 404);
     } catch (e) {
       return json({ error: "代理异常：" + (e.message || e) }, 500);
+    }
+}
+
+// 全局兜底：任何未捕获异常都转成可读 JSON（而不是 Cloudflare 的 Error 1101 空白页）
+export default {
+  async fetch(request, env) {
+    try {
+      return await handle(request, env);
+    } catch (e) {
+      return json({
+        error: "Worker 内部异常（原 Error 1101）：" + ((e && (e.stack || e.message)) || String(e)),
+      }, 500);
     }
   },
 };

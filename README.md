@@ -105,6 +105,17 @@ cp .dev.vars.example .dev.vars   # 填入测试用 token（.dev.vars 不要提�
 npx wrangler dev                 # http://localhost:8787
 ```
 
+## 故障排查
+
+**访问报 Error 1101（Worker threw exception）**
+
+1. 先访问 `https://<你的域名>/api/health`，返回各绑定状态：
+   - `assets: false` → 部署时未应用 `wrangler.jsonc` 的 assets 配置。最常见原因：在 Dashboard「快速编辑」里只粘贴了 `src/worker.js` 创建的 Worker（没有静态资源绑定，一访问页面就 1101）。修复：删掉该 Worker，改用上面的 GitHub 连接部署（Workers Builds 会按仓库里的 wrangler.jsonc 完整部署），或在 `worker/` 目录本地执行 `npx wrangler deploy`。
+   - `adminToken / cfApiToken: false` → 对应 Secret 没配置，去 Settings → Variables and Secrets 添加后重新部署。
+   - `accountIdSet: false` → 账户 ID 未配置。
+2. health 正常但个别操作报错 → Dashboard → 该 Worker → **Logs → Begin log stream**，然后刷新页面/重试操作，可看到具体异常堆栈。
+3. 本项目 Worker 已内置全局异常兜底：任何内部异常都会返回带堆栈的 JSON 报错（HTTP 500），不会再出现空白 1101——升级到最新代码后报错信息可直接看响应内容。
+
 ## 已知边界（以实际 API 返回为准）
 
 - 动态路由 elements 的字段结构以 `GET /routes/{id}` 实际返回为准；前端做了归一化，
