@@ -11,7 +11,7 @@
     "directory": "./public",
     "binding": "ASSETS",
     "run_worker_first": true
-  },
+  }
   // ACCOUNT_ID 不在配置文件里定义（避免占位符每次部署覆盖真实值）：
   // 在 Dashboard → Settings → Variables and Secrets 里配置（Text 类型即可），
   // keep_vars: true 会保证部署时保留 Dashboard 设置的变量。
