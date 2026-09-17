@@ -121,10 +121,29 @@ npx wrangler dev                 # http://localhost:8787
 2. health 正常但个别操作报错 → Dashboard → 该 Worker → **Logs → Begin log stream**，然后刷新页面/重试操作，可看到具体异常堆栈。
 3. 本项目 Worker 已内置全局异常兜底：任何内部异常都会返回带堆栈的 JSON 报错（HTTP 500），不会再出现空白 1101——升级到最新代码后报错信息可直接看响应内容。
 
-## 已知边界（以实际 API 返回为准）
+## API 响应结构（实测，与官方 API reference 的差异）
 
-- 动态路由 elements 的字段结构以 `GET /routes/{id}` 实际返回为准；前端做了归一化，
-  「代码」页可直接编辑 JSON 兜底。
+官方 API reference：<https://developers.cloudflare.com/api/resources/ai_gateway/subresources/dynamic_routing/>
+
+**重要**：reference 页面上的 schema 与实际返回并不完全一致，前端按「兼容两种」实现。实测差异：
+
+| 项 | 官方 API reference | 账号实际返回 |
+|---|---|---|
+| 外层信封 | `GET /routes/{id}`、`GET .../versions/{vid}` 页面写 `result`；`GET /routes` 页面写 `data` | 统一 `{ success, data }` |
+| elements 位置 | route 顶层有 `elements` 数组；version 也有 `elements` 数组 | route 顶层**没有** `elements`；elements 在 `version.data` 里 |
+| `version.data` 类型 | `string`（文档标注为字符串） | **数组**（已解析好的 elements） |
+| `version.active` 类型 | `"true"` / `"false"`（字符串） | 布尔 `true` / `false` |
+| version 额外字段 | 无 | 多出 `resource_id` / `resource_type` |
+
+因此前端用 `extractElements()` 同时接受以下 4 种位置，任一命中即可渲染：
+
+- `obj.elements`（数组）
+- `obj.data`（数组，或 JSON 字符串）
+- `obj.version.elements`（数组）
+- `obj.version.data`（数组，或 JSON 字符串）
+
+## 已知边界
+
 - 模型节点多出口（出错→备用）依赖 API 是否支持 model 双输出；fallback 模板创建时
   如被 API 拒绝，可在「代码」页调整。
 - 「拉取全部模型」两种方式（自动选择）：
@@ -133,4 +152,4 @@ npx wrangler dev                 # http://localhost:8787
      自动复用你在 AI Gateway → Provider Keys 里存的密钥，**无需再配置任何厂商密钥**。
      仅当网关开启了认证（Authentication）时才需要额外配 `CF_AIG_TOKEN`（AI Gateway 页面生成的令牌）。
   某厂商两种方式都不可用时，会提示手动输入模型名。
-- 版本列表字段（id / created_at / active）若与预期不同，前端按归一化尽力渲染。
+- 画布解析不到 elements 时，页面会浮出「流程图为空 · 调试信息」面板，直接显示接口原始 JSON。
