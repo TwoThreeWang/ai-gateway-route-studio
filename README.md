@@ -72,10 +72,10 @@ git push -u origin main
 
 | 类型 | 变量名 | 值 | 说明 |
 |---|---|---|---|
-| Text | `ACCOUNT_ID` | 你的账户 ID | dash 右侧栏可查；也可直接改 `wrangler.jsonc` 里的 vars 后 push |
+| Text | `ACCOUNT_ID` | 你的账户 ID | dash 右侧栏可查；`keep_vars: true` 保证部署不覆盖 |
 | Secret | `ADMIN_TOKEN` | 自定强口令 | 管理台登录口令 |
 | Secret | `CF_API_TOKEN` | Cloudflare API Token | 需要 **AI Gateway:Edit** + **Account Settings:Read** 权限 |
-| Secret | `OPENAI_API_KEY` 等 | 各厂商密钥 | 可选，配了才能在线拉取模型列表 |
+| Secret | `OPENAI_API_KEY` 等 | 各厂商密钥 | 可选；一般无需配置——模型拉取会自动走网关 BYOK |
 
 > ⚠️ **密钥务必选 Secret 类型，不要选 Text**：
 > - **Text 变量**每次部署都会被仓库里的 `wrangler.jsonc` 覆盖——Dashboard 里设置但配置文件里没有的 Text 变量会被删掉。

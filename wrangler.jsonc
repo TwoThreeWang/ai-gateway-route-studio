@@ -12,11 +12,10 @@
     "binding": "ASSETS",
     "run_worker_first": true
   },
-  // 账户 ID（非敏感，网关调用 URL 里本来就含此 ID；私有仓库无风险）
-  // 写死后 Dashboard 里无需再配 ACCOUNT_ID，部署也不会再被覆盖
-  "vars": {
-    "ACCOUNT_ID": "d2fee57c34c53ed8eb799795cd106648"
-  }
+  // ACCOUNT_ID 不在配置文件里定义（避免占位符每次部署覆盖真实值）：
+  // 在 Dashboard → Settings → Variables and Secrets 里配置（Text 类型即可），
+  // keep_vars: true 会保证部署时保留 Dashboard 设置的变量。
+  // 本地开发则在 .dev.vars 里配置。
   // 敏感信息用 secret（不要写在这里）。两种配置方式任选：
   //   GitHub 部署：Dashboard → 该 Worker → Settings → Variables and Secrets → Add（类型必须选 Secret）
   //   CLI 部署：wrangler secret put ADMIN_TOKEN / CF_API_TOKEN / OPENAI_API_KEY 等
