@@ -40,8 +40,8 @@ const C = { orange: "#F6821F", orangeDark: "#C2410C", ink: "#1C1C1E", ink2: "#52
 const NODE_META = {
   start: { label: "开始", color: "#71717A" }, end: { label: "结束", color: "#71717A" },
   conditional: { label: "判断", color: C.blue }, percentage: { label: "分流", color: C.rose },
-  model: { label: "模型", color: C.orange }, "rate-limit": { label: "限流", color: C.teal },
-  "budget-limit": { label: "预算", color: C.orangeDark }, unknown: { label: "节点", color: "#71717A" },
+  model: { label: "模型", color: C.orange }, rate: { label: "限额", color: C.teal },
+  unknown: { label: "节点", color: "#71717A" },
 };
 const PROVIDERS = ["openai","anthropic","google-ai-studio","vertex","azure-openai","bedrock",
   "workers-ai","deepseek","moonshot","xai","groq","mistral","cohere","perplexity","openrouter",
@@ -109,15 +109,71 @@ function pickList(data) {
 }
 // 版本列表归一化：真实 API 用 version_id 而非 id
 const normVersions = (list) => (list || []).map((v) => ({ ...v, id: v.id || v.version_id }));
-const elType = (e) => NODE_META[e?.type] ? e.type : "unknown";
+const elType = (e) => {
+  const t = e?.type;
+  if (t === "rate-limit" || t === "budget-limit") return "rate"; // 兼容旧结构
+  return NODE_META[t] ? t : "unknown";
+};
+
+// ── outputs 解析（官方结构：命名键对象 {"success":{elementId},"fallback":{...}}；兼容旧数组结构）──
+const OUT_LABELS = { next: "继续", true: "满足", false: "不满足", success: "正常", fallback: "出错" };
+const outLabel = (k) => OUT_LABELS[k] || (/%$/.test(String(k)) ? k : String(k));
+function outEntries(el) {
+  const o = el.outputs || {};
+  if (Array.isArray(o)) return o.map((x, i) => ({ key: i === 0 ? "success" : "fallback", target: x?.next?.elementId || null }));
+  return Object.keys(o).map((k) => ({ key: k, target: o[k]?.next?.elementId || null }));
+}
+// 节点应显示的输出口：类型默认口 + 已有口合并（未连线的口也要能"插入节点"）
+function outPorts(el) {
+  const map = new Map();
+  outEntries(el).forEach((x) => map.set(x.key, x.target));
+  const defaults = { start: ["next"], conditional: ["true", "false"], model: ["success", "fallback"], rate: ["success", "fallback"] }[el.type];
+  (defaults || []).forEach((k) => { if (!map.has(k)) map.set(k, null); });
+  let list = [...map].map(([key, target]) => ({ key, target }));
+  if (el.type === "percentage" && !list.length) list = [{ key: "40%", target: null }, { key: "60%", target: null }];
+  return list;
+}
+// 时间窗口（秒）→ 可读文案
+function winDesc(s) {
+  return { 60: "分钟", 3600: "小时", 86400: "天", 604800: "周", 2592000: "月" }[s] || (s ? `${s} 秒` : "—");
+}
+// 新建节点默认属性 / 默认输出口（官方结构）
+function defaultProps(type) {
+  switch (type) {
+    case "model": return { provider: "openai", model: "gpt-4.1-mini", timeout: 60000, retries: 2 };
+    case "conditional": return { conditions: { "metadata.plan": { "$eq": "paid" } } };
+    case "rate-count": return { limitType: "count", key: "metadata.user_id", limit: 100, window: 3600 };
+    case "rate-cost": return { limitType: "cost", key: "metadata.user_id", limit: 20, window: 2592000 };
+    default: return {};
+  }
+}
+function defaultOutputs(type, t) {
+  const nx = t ? { elementId: t } : null;
+  if (type === "conditional") return nx ? { true: nx } : {};
+  if (type === "model" || type === "rate") return nx ? { success: nx } : {};
+  if (type === "percentage") return {};
+  return nx ? { next: nx } : {};
+}
+// 条件对象 → 可读文案（支持旧 expression 字段）
+function condText(p) {
+  if (p.expression) return p.expression;
+  const c = p.conditions || {};
+  const sym = { "$eq": "==", "$ne": "!=", "$in": "属于", "$gt": ">", "$lt": "<", "$gte": "≥", "$lte": "≤" };
+  return Object.entries(c).map(([k, ops]) => {
+    const op = Object.entries(ops || {})[0];
+    if (!op) return k;
+    return `${k} ${sym[op[0]] || op[0]} ${JSON.stringify(op[1])}`;
+  }).join(" 且 ") || "—";
+}
 function elLines(e) {
   const p = e.properties || {};
-  switch (e.type) {
+  switch (elType(e)) {
     case "model": return [["服务商", p.provider || "—"], ["模型", p.model || "—"]];
-    case "conditional": return [["判断规则", p.expression || "—"]];
-    case "rate-limit": return [["次数上限", `${p.limit ?? "—"} 次 / ${PERIODS[p.period] || p.period || "—"}`]];
-    case "budget-limit": return [["花费上限", `$${p.limit ?? "—"} / ${PERIODS[p.period] || p.period || "—"}`]];
-    case "percentage": return Array.isArray(p.weights) ? p.weights.map((w, i) => [`线路 ${String.fromCharCode(65 + i)}`, `${w}%`]) : [];
+    case "conditional": return [["判断规则", condText(p)]];
+    case "rate": return p.limitType === "cost"
+      ? [["花费上限", `$${p.limit ?? "—"} / ${winDesc(p.window)}`], ["按谁算", p.key || "—"]]
+      : [["次数上限", `${p.limit ?? "—"} 次 / ${winDesc(p.window)}`], ["按谁算", p.key || "—"]];
+    case "percentage": return outEntries(e).map(({ key }, i) => [`线路 ${String.fromCharCode(65 + i)}`, key]);
     default: return [];
   }
 }
@@ -131,9 +187,8 @@ function elementsToGraph(els) {
     const q = [start.id];
     while (q.length) {
       const id = q.shift();
-      (byId[id]?.outputs || []).forEach((o) => {
-        const nx = o?.next?.elementId;
-        if (nx && byId[nx] && depth[nx] === undefined) { depth[nx] = depth[id] + 1; q.push(nx); }
+      outEntries(byId[id] || {}).forEach(({ target }) => {
+        if (target && byId[target] && depth[target] === undefined) { depth[target] = depth[id] + 1; q.push(target); }
       });
     }
   }
@@ -144,47 +199,50 @@ function elementsToGraph(els) {
     const d = depth[e.id];
     cols[d] = (cols[d] === undefined ? -1 : cols[d]) + 1;
     const lineCount = elLines(e).length;
-    const h = Math.max(84, 38 + lineCount * 24 + (e.outputs?.length > 1 ? 14 : 0));
+    const h = Math.max(84, 38 + lineCount * 24 + (outPorts(e).length > 1 ? 14 : 0));
     return { el: e, x: 40 + d * 300, y: 30 + cols[d] * 168, h };
   });
   const edges = [];
-  els.forEach((e) => (e.outputs || []).forEach((o, i) => {
-    const t = o?.next?.elementId;
-    if (t && byId[t]) edges.push([e.id, i, t]);
+  els.forEach((e) => outEntries(e).forEach(({ key, target }, i) => {
+    if (target && byId[target]) edges.push([e.id, i, target, key]);
   }));
   const colCount = Math.max(0, ...Object.keys(cols).map(Number)) + 1;
   const maxCol = Math.max(1, ...Object.values(cols).map((c) => c + 1));
   return { nodes, edges, w: Math.max(900, 40 + colCount * 300 + 140), h: Math.max(420, 30 + maxCol * 168) };
 }
-const portY = (node, idx) => node.y + ((idx + 1) * node.h) / ((node.el.outputs?.length || 1) + 1);
+const portY = (node, idx) => node.y + ((idx + 1) * node.h) / (outPorts(node.el).length + 1);
 const inY = (node) => node.y + node.h / 2;
 
-/* ───── 模板（elements 真实结构） ───── */
+/* ───── 模板（官方 elements 结构：outputs 为命名键对象） ───── */
 function buildTemplate(kind) {
   const els = [];
-  const add = (id, type, props) => { els.push({ id, type, outputs: [], ...(props ? { properties: props } : {}) }); return els[els.length - 1]; };
-  const link = (from, outIdx, toId) => { els.find((e) => e.id === from).outputs[outIdx] = { next: { elementId: toId } }; };
+  const add = (id, type, props) => { els.push({ id, type, outputs: {}, ...(props ? { properties: props } : {}) }); return els[els.length - 1]; };
+  const link = (from, key, toId) => { els.find((e) => e.id === from).outputs[key] = { elementId: toId }; };
   if (kind === "paid") {
-    add("e1","start"); add("e2","conditional",{expression:'user_plan == "paid"'});
-    add("e3","budget-limit",{limit:50,period:"month"}); add("e4","model",{provider:"openai",model:"gpt-4.1"});
-    add("e5","rate-limit",{limit:120,period:"minute"}); add("e6","model",{provider:"openai",model:"o4-mini-high"});
+    add("e1","start"); add("e2","conditional",{ conditions: { "metadata.plan": { "$eq": "paid" } } });
+    add("e3","rate",{ limitType:"cost", key:"metadata.user_id", limit:50, window:2592000 });
+    add("e4","model",{ provider:"openai", model:"gpt-4.1" });
+    add("e5","rate",{ limitType:"count", key:"metadata.user_id", limit:120, window:3600 });
+    add("e6","model",{ provider:"openai", model:"o4-mini-high" });
     add("e7","end");
-    link("e1",0,"e2"); link("e2",0,"e3"); link("e2",1,"e5"); link("e3",0,"e4");
-    link("e5",0,"e6"); link("e4",0,"e7"); link("e6",0,"e7");
+    link("e1","next","e2"); link("e2","true","e3"); link("e2","false","e5");
+    link("e3","success","e4"); link("e5","success","e6");
+    link("e4","success","e7"); link("e6","success","e7");
   } else if (kind === "ab") {
-    add("a1","start"); add("a2","percentage",{weights:[10,90]});
-    add("a3","model",{provider:"deepseek",model:"deepseek-chat"}); add("a4","model",{provider:"openai",model:"gpt-4.1"});
+    add("a1","start"); add("a2","percentage");
+    add("a3","model",{ provider:"deepseek", model:"deepseek-chat" }); add("a4","model",{ provider:"openai", model:"gpt-4.1" });
     add("a5","end");
-    link("a1",0,"a2"); link("a2",0,"a3"); link("a2",1,"a4"); link("a3",0,"a5"); link("a4",0,"a5");
+    link("a1","next","a2"); link("a2","10%","a3"); link("a2","90%","a4");
+    link("a3","success","a5"); link("a4","success","a5");
   } else if (kind === "limit") {
-    add("b1","start"); add("b2","rate-limit",{limit:60,period:"minute"});
-    add("b3","model",{provider:"openai",model:"gpt-4.1-mini"}); add("b4","end");
-    link("b1",0,"b2"); link("b2",0,"b3"); link("b3",0,"b4");
+    add("b1","start"); add("b2","rate",{ limitType:"count", key:"metadata.user_id", limit:60, window:3600 });
+    add("b3","model",{ provider:"openai", model:"gpt-4.1-mini" }); add("b4","end");
+    link("b1","next","b2"); link("b2","success","b3"); link("b3","success","b4");
   } else { // fallback
-    add("f1","start"); add("f2","model",{provider:"openai",model:"gpt-4.1"});
-    add("f3","model",{provider:"anthropic",model:"claude-haiku-4"}); add("f4","end");
-    els.find((e) => e.id === "f2").outputs = [{ next: { elementId: "f4" } }, { next: { elementId: "f3" } }];
-    link("f1",0,"f2"); link("f3",0,"f4");
+    add("f1","start"); add("f2","model",{ provider:"openai", model:"gpt-4.1", timeout:60000, retries:2 });
+    add("f3","model",{ provider:"anthropic", model:"claude-haiku-4" }); add("f4","end");
+    els.find((e) => e.id === "f2").outputs = { success: { elementId: "f4" }, fallback: { elementId: "f3" } };
+    link("f1","next","f2"); link("f3","success","f4");
   }
   return els;
 }
@@ -320,10 +378,16 @@ function FlowNode({ node, selected, onClick, onAddAt }) {
   const meta = NODE_META[elType(node.el)];
   const hideT = useRef(null);
   const [hover, setHover] = useState(false);
+  const [menuAt, setMenuAt] = useState(null); // 打开类型菜单的输出口下标
   const show = () => { clearTimeout(hideT.current); setHover(true); };
-  const hideSoon = () => { clearTimeout(hideT.current); hideT.current = setTimeout(() => setHover(false), 350); };
-  const outs = node.el.outputs || [];
+  const hideSoon = () => { clearTimeout(hideT.current); hideT.current = setTimeout(() => { setHover(false); setMenuAt(null); }, 350); };
+  const outs = outPorts(node.el);
   const lines = elLines(node.el);
+  const TYPE_MENU = [
+    ["model", "🤖 模型"], ["conditional", "🔀 条件判断"],
+    ["rate-count", "⏱ 次数限额"], ["rate-cost", "💰 花费限额"],
+    ["percentage", "📊 灰度分流"], ["end", "🏁 结束"],
+  ];
   return (
     <div onClick={onClick} onMouseEnter={show} onMouseLeave={hideSoon}
       style={{ position: "absolute", left: node.x, top: node.y, width: 216, minHeight: node.h,
@@ -333,16 +397,38 @@ function FlowNode({ node, selected, onClick, onAddAt }) {
       {outs.length > 0 && <div style={{ position: "absolute", left: -5, top: node.h / 2 - 5, width: 10, height: 10,
         borderRadius: 5, background: C.panel, border: `2px solid ${C.ink3}` }} />}
       {outs.map((o, i) => (
-        <React.Fragment key={i}>
+        <React.Fragment key={o.key}>
           <div style={{ position: "absolute", right: -5, top: portY(node, i) - node.y - 5,
             width: 10, height: 10, borderRadius: 5, background: C.orange, border: "2px solid #fff",
             boxShadow: "0 0 0 1px rgba(0,0,0,.12)" }} />
           {hover && (
-            <button onClick={(e) => { e.stopPropagation(); onAddAt(node.el.id, i); }}
-              onMouseEnter={show} onMouseLeave={hideSoon} title="在这个出口后面加一步"
-              style={{ position: "absolute", left: 224, top: portY(node, i) - node.y - 11,
-                width: 22, height: 22, borderRadius: 11, background: C.ink, color: "#fff",
-                fontSize: 14, lineHeight: 1, boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}>＋</button>
+            <div style={{ position: "absolute", left: 222, top: portY(node, i) - node.y - 11, display: "flex", alignItems: "center", gap: 4 }}
+              onMouseEnter={show} onMouseLeave={hideSoon}>
+              <span style={{ fontSize: 9.5, color: o.target ? C.ink3 : C.orangeDark, background: C.panel,
+                border: `1px solid ${C.line}`, borderRadius: 4, padding: "1px 5px" }}>
+                {outLabel(o.key)}{o.target ? " ✓" : " →"}
+              </span>
+              <button onClick={(e) => { e.stopPropagation(); setMenuAt(menuAt === i ? null : i); }}
+                title="在这个出口后面加一步"
+                style={{ width: 22, height: 22, borderRadius: 11, background: menuAt === i ? C.orangeDark : C.ink, color: "#fff",
+                  fontSize: 14, lineHeight: 1, boxShadow: "0 2px 6px rgba(0,0,0,.25)" }}>＋</button>
+              {menuAt === i && (
+                <div style={{ position: "absolute", left: 26, top: 24, zIndex: 30, width: 132,
+                  background: C.panel, border: `1px solid ${C.line}`, borderRadius: 8, padding: 4,
+                  boxShadow: "0 8px 24px rgba(0,0,0,.16)" }}>
+                  {TYPE_MENU.map(([t, name]) => (
+                    <button key={t} onClick={(e) => { e.stopPropagation(); setMenuAt(null); onAddAt(node.el.id, o.key, i, t); }}
+                      style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 8px",
+                        border: "none", background: "transparent", borderRadius: 5, fontSize: 12, color: C.ink,
+                        cursor: "pointer" }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = C.bg; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </React.Fragment>
       ))}
@@ -352,8 +438,9 @@ function FlowNode({ node, selected, onClick, onAddAt }) {
         <span className="display" style={{ fontWeight: 700, fontSize: 13 }}>
           {node.el.type === "model" ? (node.el.properties?.model || "模型")
             : node.el.type === "start" ? "开始" : node.el.type === "end" ? "结束"
-            : node.el.type === "conditional" ? "条件判断" : node.el.type === "rate-limit" ? "次数上限"
-            : node.el.type === "budget-limit" ? "花费上限" : node.el.type === "percentage" ? "灰度分流"
+            : elType(node.el) === "conditional" ? "条件判断"
+            : elType(node.el) === "rate" ? (node.el.properties?.limitType === "cost" ? "花费上限" : "次数上限")
+            : node.el.type === "percentage" ? "灰度分流"
             : (node.el.type || "未知")}
         </span>
         <span style={{ flex: 1 }} />
@@ -382,14 +469,24 @@ function Canvas({ graph, selectedId, onSelect, onInsert, zoom, setZoom, gwId, ac
     }
     setCopied(true); setTimeout(() => setCopied(false), 2000);
   };
-  const edgePaths = graph.edges.map(([from, idx, to], i) => {
+  const edgePaths = graph.edges.map(([from, idx, to, key], i) => {
     const a = graph.nodes.find((n) => n.el.id === from);
     const b = graph.nodes.find((n) => n.el.id === to);
     if (!a || !b) return null;
     const p1 = { x: a.x + 216, y: portY(a, idx) }, p2 = { x: b.x, y: inY(b) };
     const mx = Math.max(40, (p2.x - p1.x) / 2);
-    return <path key={i} d={`M ${p1.x} ${p1.y} C ${p1.x + mx} ${p1.y}, ${p2.x - mx} ${p2.y}, ${p2.x} ${p2.y}`}
-      fill="none" stroke={C.ink3} strokeWidth="1.6" />;
+    const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 - 8 };
+    const lbl = key && key !== "next" && key !== "success" ? outLabel(key) : null;
+    return (
+      <React.Fragment key={i}>
+        <path d={`M ${p1.x} ${p1.y} C ${p1.x + mx} ${p1.y}, ${p2.x - mx} ${p2.y}, ${p2.x} ${p2.y}`}
+          fill="none" stroke={C.ink3} strokeWidth="1.6" />
+        {lbl && (
+          <text x={mid.x} y={mid.y} textAnchor="middle" fontSize="9"
+            fill={C.ink3} style={{ fontFamily: "IBM Plex Mono, monospace" }}>{lbl}</text>
+        )}
+      </React.Fragment>
+    );
   });
   const toolBtn = (active) => ({ padding: "5px 12px", borderRadius: 6, fontSize: 12,
     background: active ? C.ink : "transparent", color: active ? "#fff" : C.ink2, fontWeight: active ? 700 : 400 });
@@ -423,7 +520,7 @@ function Canvas({ graph, selectedId, onSelect, onInsert, zoom, setZoom, gwId, ac
               {graph.nodes.map((n) => (
                 <FlowNode key={n.el.id} node={n} selected={n.el.id === selectedId}
                   onClick={(e) => { e.stopPropagation(); onSelect(n.el.id); }}
-                  onAddAt={(srcId, outIdx) => onInsert(srcId, outIdx)} />
+                  onAddAt={(srcId, outKey, outIdx, type) => onInsert(srcId, outKey, outIdx, type)} />
               ))}
             </div>
           </div>
@@ -466,7 +563,7 @@ function Canvas({ graph, selectedId, onSelect, onInsert, zoom, setZoom, gwId, ac
 }
 
 /* ───── 检查器 ───── */
-function Inspector({ elements, selectedId, patchProps, onDeleteNode, versions, deployedVid,
+function Inspector({ elements, selectedId, patchProps, setOutputs, onDeleteNode, versions, deployedVid,
   onDeployVersion, onRollback, routeName, gwId, onDeleteRoute, pulling, pullModels, models, pulledFrom }) {
   const [tab, setTab] = useState("node");
   const [confirmDel, setConfirmDel] = useState(false);
@@ -504,70 +601,91 @@ function Inspector({ elements, selectedId, patchProps, onDeleteNode, versions, d
           <input className="mono" list="dl-models" style={field} value={p.model || ""}
             onChange={(e) => setP({ model: e.target.value })} />
           <datalist id="dl-models">{(models || []).map((m) => <option key={m} value={m} />)}</datalist>
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <div style={label}>超时（毫秒）</div>
+              <input type="number" style={field} value={p.timeout ?? 60000}
+                onChange={(e) => setP({ timeout: +e.target.value || 60000 })} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={label}>失败重试次数</div>
+              <input type="number" style={field} value={p.retries ?? 2}
+                onChange={(e) => setP({ retries: +e.target.value || 0 })} />
+            </div>
+          </div>
           <div style={hint}>
-            {pulling ? "正在通过 Worker 反代厂商接口获取…"
-              : pulledFrom === p.provider
-                ? `已拉取 ${(models || []).length} 个模型`
-                : "可直接输入；点「拉取全部模型」由 Worker 反代厂商 /models 接口获取（需配置对应厂商密钥）。"}
+            点「拉取全部模型」由 Worker 反代厂商 /models 接口获取（优先直连密钥，其次网关 BYOK）。
           </div>
           <div style={{ ...label, marginTop: 14 }}>出错时怎么办？</div>
           <div style={hint}>
-            若 API 支持 model 多出口，可把备用模型的 elementId 接到本节点出错输出上；
-            「代码」页可直接编辑 outputs 数组。
+            模型节点有「正常」和「出错」两个出口：把备用模型的 elementId 接到「出错」口，
+            主模型失败时自动切备用（模板「故障兜底」就是现成例子）。
           </div>
         </div>
       );
       case "conditional": return (
         <div>
-          <div style={label}>判断表达式</div>
-          <input className="mono" style={field} value={p.expression || ""}
-            onChange={(e) => setP({ expression: e.target.value })} />
+          <div style={label}>判断条件（JSON，MongoDB 风格操作符）</div>
+          <textarea className="mono" rows={4} style={{ ...field, resize: "vertical" }}
+            value={JSON.stringify(p.conditions || {}, null, 2)}
+            onChange={(e) => { try { setP({ conditions: JSON.parse(e.target.value) }); } catch (err) {} }} />
           <div style={hint}>
-            写法：<span className="mono">标签名 == "值"</span>，标签来自请求头
-            <span className="mono"> cf-aig-metadata</span>（最多 5 条，string / number / boolean）。
+            键为请求字段（标签来自请求头 <span className="mono">cf-aig-metadata</span>，如
+            <span className="mono"> metadata.plan</span>）；操作符支持
+            <span className="mono"> $eq / $ne / $in / $gt / $lt / $and / $or</span>。
           </div>
           <div style={{ ...label, marginTop: 12 }}>常用示例（点一下直接填）</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
-            {['user_plan == "paid"', 'team == "vip"', 'env == "test"'].map((m) => (
-              <button key={m} className="mono" onClick={() => setP({ expression: m })}
+            {[
+              ['plan 付费', { "metadata.plan": { "$eq": "paid" } }],
+              ['team VIP', { "metadata.team": { "$eq": "vip" } }],
+              ['env 测试', { "metadata.env": { "$eq": "test" } }],
+            ].map(([m, c]) => (
+              <button key={m} className="mono" onClick={() => setP({ conditions: c })}
                 style={{ fontSize: 10.5, padding: "4px 9px", background: C.bg,
                   border: `1px solid ${C.line}`, borderRadius: 5, color: C.ink2 }}>{m}</button>
             ))}
           </div>
         </div>
       );
-      case "rate-limit": return (
+      case "rate": return (
         <div>
-          <div style={label}>最多允许多少次请求？</div>
+          <div style={label}>限制类型</div>
+          <select style={field} value={p.limitType || "count"}
+            onChange={(e) => setP({ limitType: e.target.value })}>
+            <option value="count">按次数</option><option value="cost">按花费（美元）</option>
+          </select>
+          <div style={label}>{p.limitType === "cost" ? "最多愿意花多少美元？" : "最多允许多少次请求？"}</div>
           <input type="number" style={field} value={p.limit ?? 100}
             onChange={(e) => setP({ limit: +e.target.value || 1 })} />
           <div style={label}>按多长时间算？</div>
-          <select style={field} value={p.period || "minute"}
-            onChange={(e) => setP({ period: e.target.value })}>
-            <option value="minute">每分钟</option><option value="hour">每小时</option><option value="day">每天</option>
+          <select style={field} value={p.window || 3600}
+            onChange={(e) => setP({ window: +e.target.value })}>
+            <option value="60">每分钟</option><option value="3600">每小时</option>
+            <option value="86400">每天</option><option value="604800">每周</option><option value="2592000">每月（30天）</option>
           </select>
-          <div style={hint}>超限的请求自动走 fallback 分支，不会报错。</div>
-        </div>
-      );
-      case "budget-limit": return (
-        <div>
-          <div style={label}>最多愿意花多少美元？</div>
-          <input type="number" style={field} value={p.limit ?? 20}
-            onChange={(e) => setP({ limit: +e.target.value || 1 })} />
-          <div style={label}>按多长时间算？</div>
-          <select style={field} value={p.period || "month"}
-            onChange={(e) => setP({ period: e.target.value })}>
-            <option value="month">每个月</option><option value="day">每天</option>
-          </select>
-          <div style={hint}>花超后自动走 fallback 分支，避免账单惊吓。</div>
+          <div style={label}>按谁的用量算？</div>
+          <input className="mono" style={field} value={p.key || "metadata.user_id"}
+            onChange={(e) => setP({ key: e.target.value })} />
+          <div style={hint}>通常填 <span className="mono">metadata.user_id</span>（随 cf-aig-metadata 请求头传入），实现"每个用户各算各的"。</div>
+          <div style={hint}>超限的请求自动走「出错」分支，不会报错。</div>
         </div>
       );
       case "percentage": return (
         <div>
-          <div style={label}>各线路权重（JSON 数组，如 [10, 90]）</div>
-          <input className="mono" style={field} value={JSON.stringify(p.weights || [50, 50])}
-            onChange={(e) => { try { setP({ weights: JSON.parse(e.target.value) }); } catch (err) {} }} />
-          <div style={hint}>按比例随机分配流量，适合灰度测试。</div>
+          <div style={label}>各线路权重（百分比，总和 100，如 10,90）</div>
+          <input className="mono" style={field}
+            value={outEntries(el).map(({ key }) => parseFloat(key) || 0).join(",")}
+            onChange={(e) => {
+              const arr = e.target.value.split(",").map((x) => parseFloat(x) || 0);
+              if (arr.length < 2 || arr.some((x) => x <= 0)) return;
+              const olds = outEntries(el);
+              const outputs = {};
+              arr.forEach((w, i) => { outputs[w + "%"] = olds[i]?.target ? { elementId: olds[i].target } : undefined; });
+              Object.keys(outputs).forEach((k) => { if (!outputs[k]) delete outputs[k]; });
+              setOutputs(el.id, outputs);
+            }} />
+          <div style={hint}>按比例随机分配流量，适合灰度测试。改权重不会断开已有连线。</div>
         </div>
       );
       case "start": return <div style={hint}>所有请求从这里进入流程，无需设置。</div>;
@@ -976,22 +1094,21 @@ function App() {
 
   const patchProps = (elId, patch) => setElements((els) => els.map((e) =>
     e.id === elId ? { ...e, properties: { ...(e.properties || {}), ...patch } } : e));
-  const insertAfter = (srcId, outIdx, type) => {
+  const insertAfter = (srcId, outKey, outIdx, type) => {
     const newId = "e" + Date.now().toString(36) + Math.floor(Math.random() * 1e4);
+    const realType = type || "model";
     setElements((els) => {
       const src = els.find((e) => e.id === srcId);
       if (!src) return els;
-      src.outputs = src.outputs || [];
-      while (src.outputs.length <= outIdx) src.outputs.push({ next: null });
-      const oldNext = src.outputs[outIdx]?.next || null;
-      const def = { id: newId, type, outputs: [{ next: oldNext }] };
-      if (type === "model") def.properties = { provider: "openai", model: "gpt-4.1-mini" };
-      if (type === "conditional") def.properties = { expression: 'user_plan == "paid"' };
-      if (type === "rate-limit") def.properties = { limit: 100, period: "minute" };
-      if (type === "budget-limit") def.properties = { limit: 20, period: "month" };
-      if (type === "percentage") def.properties = { weights: [20, 80] };
-      src.outputs[outIdx] = { next: { elementId: newId } };
-      return els.map((e) => (e.id === srcId ? src : e)).concat([def]);
+      const outs = { ...(src.outputs || {}) };
+      let oldNext = outs[outKey]?.next?.elementId || null;
+      // 在空的「出错/不满足」口插入时，新节点主出口接管主口下游，形成兜底链
+      if (!oldNext && outKey !== "next" && outKey !== "success") {
+        oldNext = outEntries(src).find(({ key }) => key === "success" || key === "next")?.target || null;
+      }
+      outs[outKey] = { elementId: newId };
+      const def = { id: newId, type: realType, outputs: defaultOutputs(realType, oldNext), properties: defaultProps(realType) };
+      return els.map((e) => (e.id === srcId ? { ...e, outputs: outs } : e)).concat([def]);
     });
     setSelectedId(newId);
   };
@@ -999,18 +1116,23 @@ function App() {
     setElements((els) => {
       const target = els.find((e) => e.id === elId);
       if (!target) return els;
-      const outTargets = (target.outputs || []).map((o) => o?.next?.elementId).filter(Boolean);
-      const firstOut = outTargets[0] || null;
+      const firstOut = outEntries(target).map((o) => o.target).filter(Boolean)[0] || null;
       return els
         .filter((e) => e.id !== elId)
-        .map((e) => ({
-          ...e,
-          outputs: (e.outputs || []).map((o) =>
-            o?.next?.elementId === elId ? { next: firstOut ? { elementId: firstOut } : o.next } : o),
-        }));
+        .map((e) => {
+          const outputs = {};
+          Object.entries(e.outputs || {}).forEach(([k, v]) => {
+            const t = v?.next?.elementId;
+            if (t === elId) { if (firstOut) outputs[k] = { elementId: firstOut }; }
+            else if (v) outputs[k] = v;
+          });
+          return { ...e, outputs };
+        });
     });
     setSelectedId(null);
   };
+  const setOutputs = (elId, outputs) => setElements((els) => els.map((e) =>
+    e.id === elId ? { ...e, outputs } : e));
   const applyJson = () => {
     try {
       const parsed = JSON.parse(jsonDraft);
@@ -1124,7 +1246,7 @@ function App() {
             <Canvas graph={graph} selectedId={selectedId} onSelect={setSelectedId} onInsert={insertAfter}
               zoom={zoom} setZoom={setZoom} gwId={gwId} accountId={accountId} routeName={routeName}
               view={view} setView={setView} jsonDraft={jsonDraft} setJsonDraft={setJsonDraft} onApplyJson={applyJson} />
-            <Inspector elements={elements} selectedId={selectedId} patchProps={patchProps}
+            <Inspector elements={elements} selectedId={selectedId} patchProps={patchProps} setOutputs={setOutputs}
               onDeleteNode={deleteNode} versions={versions} deployedVid={deployedVid}
               onDeployVersion={rollback} onRollback={rollback} routeName={routeName} gwId={gwId}
               onDeleteRoute={deleteRoute} pulling={pulling} pullModels={pullModels}
